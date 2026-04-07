@@ -1,0 +1,32 @@
+# =========================
+# Archivos de Python
+# =========================
+# Caché compilado
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# =========================
+# Archivos del Sistema (macOS)
+# =========================
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# =========================
+# Variables de entorno (Seguridad)
+# =========================
+.env
+
+# =========================
+# Modelos pesados y Datos (Opcional)
+# =========================
+# GitHub tiene un límite de 100MB por archivo. Si tu archivo 
+# shape_predictor_68_face_landmarks.dat es muy pesado y no 
+# quieres subirlo, descomenta la siguiente línea:
+# models/*.dat
