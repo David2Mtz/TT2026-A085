@@ -24,3 +24,54 @@ Este repositorio contiene el código fuente del módulo de Visión por Computado
 ├── utils/
 │   └── flujo_camara.py         # Cliente Serial para decodificar frames JPEG en crudo.
 └── requirements.txt            # Dependencias del proyecto.
+
+```
+
+🛠️ Tecnologías y Hardware
+Lenguaje: Python 3.x
+
+Visión por Computadora: OpenCV (cv2), NumPy.
+
+Hardware Visión: ESP32-CAM
+
+Hardware Control: Microcontrolador (Controlador de Servos) + Brazo Robótico 5-DOF con pinza.
+
+Interfaz Neuronal: EMOTIV EPOC+
+
+⚙️ Instalación y Configuración
+Clonar el repositorio:
+
+Bash
+git clone
+cd TT2026-A085
+Crear y activar un entorno virtual (Recomendado):
+
+Bash
+python3 -m venv venv
+source venv/bin/activate
+Instalar dependencias:
+
+Bash
+pip install -r requirements.txt
+Configurar puertos:
+
+Revisa la instanciación de CameraSerial y ArmController en app/happyPath.py para asegurar que los puertos coincidan con tu sistema operativo (por ejemplo, /dev/cu.usbserial-XXX en macOS).
+
+🏃‍♂️ Ejecución
+Para iniciar el flujo principal, asegúrate de que el brazo se encuentre físicamente doblado en su posición segura de descanso y ejecuta:
+
+Bash
+python app/happyPath.py
+Controles Manuales: > * Presiona la tecla n en la ventana de video de OpenCV para avanzar explícitamente en la máquina de estados.
+
+Presiona q para abortar la ejecución de manera segura y cerrar los puertos.
+
+👥 Equipo de Desarrollo
+
+Aldebarán
+
+César Alberto
+
+Luis David
+
+Desarrollado en la Escuela Superior de Cómputo (ESCOM) - IPN.
