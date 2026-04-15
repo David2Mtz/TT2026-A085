@@ -66,7 +66,7 @@ class CameraSerial:
                     tiempo_inicio = time.time()
             
             if len(img_data) != img_size:
-                print(f"[Intento {intento+1}] Frame incompleto. Llegaron {len(img_data)} de {img_size} bytes.")
+                # print(f"[Intento {intento+1}] Frame incompleto. Llegaron {len(img_data)} de {img_size} bytes.")
                 continue
 
             # 4. Decodificar

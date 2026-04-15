@@ -13,19 +13,15 @@ from modules.mouth_detector import get_mouth_coordinates
 # --- MOCKS DEL ROBOT (Reemplazar con tu lógica de comunicación real) ---
 def enviar_coordenadas_brazo(x, y, z=None):
     print(f"[ROBOT] Moviendo a coordenadas X:{x}, Y:{y} " + (f"Z:{z}" if z else ""))
-    time.sleep(2) # Simulamos el tiempo que tarda el brazo en llegar
+    # time.sleep(2) # Comentado para agilizar la prueba manual
 
 def enviar_comando_pinza(accion):
     print(f"[ROBOT] Pinza: {accion.upper()}")
-    time.sleep(1)
-
-def simular_lectura_distancia_z(distancia_actual):
-    # Simula que el brazo va bajando poco a poco
-    return max(10.0, distancia_actual - 5.5) 
+    # time.sleep(1)
 # -----------------------------------------------------------------------
 
 def main():
-    # Estados posibles: OBSERVACION, RECOLECCION, ENTREGA, HOME
+    # Estados posibles: READY, OBSERVACION, RECOLECCION, ENTREGA, HOME
     estado_actual = "OBSERVACION"
     color_objetivo = "Rojo" # Hardcodeado según regla de negocio
     
@@ -37,14 +33,32 @@ def main():
         2: {"x": 450, "y": 200}  # Derecha
     }
 
+    # Coordenadas dummy de entrega para evitar errores
+    X_ENTREGA = 500
+    Y_ENTREGA = 500
+
     camara = CameraSerial(port='/dev/cu.usbserial-210', baud_rate=460800)
-    distancia_z_simulada = 40.0 # Iniciamos a 40cm de la mesa
+
+    print("\n================ INICIANDO HAPPY PATH MANUAL ================")
+    print("Presiona la tecla 'n' o 'N' en la ventana de video para avanzar al siguiente estado.")
+    print("Presiona 'q' para salir del programa.")
+    print("=============================================================\n")
+    print(f"ESTADO ACTUAL: {estado_actual} - Buscando color {color_objetivo}")
 
     try:
         while True:
             frame = camara.get_frame()
             if frame is None:
                 continue
+
+            # --- Captura de teclado centralizada ---
+            key = cv2.waitKey(1) & 0xFF
+            avanzar_estado = False
+            
+            if key == ord('q'):
+                break
+            elif key == ord('n') or key == ord('N'):
+                avanzar_estado = True
 
             # ==========================================
             # PASO 1: POSICIÓN DE OBSERVACIÓN (COLORES)
@@ -53,37 +67,39 @@ def main():
                 frame_procesado, arreglo_colores = process_color_frame(frame)
                 cv2.imshow('PROYECTO VISION - Happy Path', frame_procesado)
 
-                if color_objetivo in arreglo_colores:
-                    indice_posicion = arreglo_colores.index(color_objetivo)
-                    coordenadas_reales = posiciones_espacio.get(indice_posicion)
-                    
-                    print(f"\n--- [VISION] {color_objetivo} detectado en posición {indice_posicion} ---")
-                    
-                    # Mandamos coordenadas y cambiamos de estado
-                    enviar_coordenadas_brazo(coordenadas_reales["x"], coordenadas_reales["y"])
-                    estado_actual = "RECOLECCION"
+                if avanzar_estado:
+                    # Imprimir el arreglo final exacto en consola
+                    print("\n" + "="*50)
+                    print(f"[ESTADO FINAL DE COLORES]")
+                    print(f"Izquierda (0): {arreglo_colores[0]}")
+                    print(f"Centro    (1): {arreglo_colores[1]}")
+                    print(f"Derecha   (2): {arreglo_colores[2]}")
+                    print("="*50)
+
+                    if color_objetivo in arreglo_colores:
+                        indice_posicion = arreglo_colores.index(color_objetivo)
+                        coordenadas_reales = posiciones_espacio.get(indice_posicion)
+                        
+                        print(f"\n--- [VISION] {color_objetivo} confirmado en posición {indice_posicion} ---")
+                        enviar_coordenadas_brazo(coordenadas_reales["x"], coordenadas_reales["y"])
+                        estado_actual = "RECOLECCION"
+                        print(f"\n---> AVANZANDO A ESTADO: {estado_actual}")
+                    else:
+                        print(f"\n--- [ALERTA] No se detectó el color {color_objetivo}. No se puede avanzar. Intenta de nuevo. ---")
             
             # ==========================================
             # PASO 2: POSICIÓN DE RECOLECCIÓN (BAJADA)
             # ==========================================
             elif estado_actual == "RECOLECCION":
-                # Mostramos la cámara normal mientras baja
                 cv2.imshow('PROYECTO VISION - Happy Path', frame)
-                
-                # Leemos la distancia (aquí simulo que un sensor te da el valor)
-                distancia_z_simulada = simular_lectura_distancia_z(distancia_z_simulada)
-                print(f"[SENSOR] Distancia a la mesa: {distancia_z_simulada} cm")
 
-                if distancia_z_simulada <= 10.0:
-                    print("\n--- [CONTROL] Distancia óptima alcanzada (10cm). Iniciando extracción ---")
+                if avanzar_estado:
+                    print("\n--- [CONTROL] Simulación de llegada a 10cm de la mesa ---")
+                    print("Iniciando extracción...")
                     enviar_comando_pinza("cerrar")
-                    
-                    # Simulamos que sube y va a la zona del maniquí
-                    enviar_coordenadas_brazo(X_ENTREGA, Y_ENTREGA) # TODO: Tus coords de seguridad
+                    enviar_coordenadas_brazo(X_ENTREGA, Y_ENTREGA)
                     estado_actual = "ENTREGA"
-                else:
-                    # Pequeño delay simulando la bajada constante
-                    time.sleep(0.5)
+                    print(f"\n---> AVANZANDO A ESTADO: {estado_actual}")
 
             # ==========================================
             # PASO 3: POSICIÓN DE ENTREGA (LANDMARKS BOCA)
@@ -92,33 +108,30 @@ def main():
                 frame_procesado, coords_boca = get_mouth_coordinates(frame)
                 cv2.imshow('PROYECTO VISION - Happy Path', frame_procesado)
 
-                if coords_boca is not None:
-                    print(f"\n--- [VISION] Boca detectada en X:{coords_boca[0]}, Y:{coords_boca[1]} ---")
+                if avanzar_estado:
+                    if coords_boca is not None:
+                        print(f"\n--- [VISION] Boca detectada y confirmada en X:{coords_boca[0]}, Y:{coords_boca[1]} ---")
+                        enviar_coordenadas_brazo(coords_boca[0], coords_boca[1])
+                    else:
+                        print("\n--- [ALERTA] Avanzando sin detectar boca (A ciegas) ---")
                     
-                    # TODO: Mapear coordenadas de pixeles a cinemática del robot
-                    enviar_coordenadas_brazo(coords_boca[0], coords_boca[1])
                     enviar_comando_pinza("abrir")
-                    
-                    print("\n--- [EXITO] Pastilla entregada. Regresando a HOME ---")
+                    print("--- [EXITO] Pastilla entregada ---")
                     estado_actual = "HOME"
+                    print(f"\n---> AVANZANDO A ESTADO: {estado_actual}")
 
             # ==========================================
             # PASO 4: REGRESO A HOME
             # ==========================================
             elif estado_actual == "HOME":
                 cv2.imshow('PROYECTO VISION - Happy Path', frame)
-                # TODO: Coordenadas de HOME
-                enviar_coordenadas_brazo(0, 0, 0)
                 
-                # Reiniciamos el ciclo para la siguiente prueba
-                distancia_z_simulada = 40.0
-                estado_actual = "OBSERVACION"
-                print("\n================ LISTO PARA NUEVA ORDEN ================\n")
-                time.sleep(3) # Pausa antes de reiniciar el ciclo visual
-
-            # --- Salida de emergencia ---
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+                if avanzar_estado:
+                    print("\n--- [CONTROL] Regresando a posición inicial ---")
+                    enviar_coordenadas_brazo(0, 0, 0)
+                    estado_actual = "OBSERVACION"
+                    print("\n================ LISTO PARA NUEVA ORDEN ================")
+                    print(f"ESTADO ACTUAL: {estado_actual} - Buscando color {color_objetivo}")
 
     except KeyboardInterrupt:
         print("\nEjecución detenida por el usuario.")
