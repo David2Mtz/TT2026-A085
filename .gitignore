@@ -21,7 +21,6 @@ env/
 # =========================
 # Variables de entorno (Seguridad)
 # =========================
-.env
 
 # =========================
 # Modelos pesados y Datos (Opcional)

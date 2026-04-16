@@ -1,11 +1,15 @@
 # modules/arm_controller.py
+import os
 import serial
 import time
+from dotenv import load_dotenv
 from constants.posiciones import POSICIONES
 
+load_dotenv()
+
 class ArmController:
-    def __init__(self, puerto='/dev/ttyUSB0', baudios=9600):
-        self.puerto = puerto
+    def __init__(self, puerto=None, baudios=9600):
+        self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial (Gemelo Digital)
         self.estado_actual = {0: 0, 1: 180, 3: 170, 4: 90, 5: 90, 6: 10}

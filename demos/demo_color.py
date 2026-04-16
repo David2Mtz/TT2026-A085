@@ -2,6 +2,7 @@
 import sys
 import os
 import cv2
+from dotenv import load_dotenv
 
 # Agregamos la ruta raíz del proyecto
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -9,12 +10,16 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.flujo_camara import CameraSerial
 from modules.detectarColor import process_color_frame
 
+# Cargar variables de entorno
+load_dotenv()
+
 def main():
     print("--- INICIANDO DEMO: Módulo de Colores ---")
     print("Presiona 'q' en la ventana de video para salir.\n")
     
     # Inicializando la conexión con tu XH-32S
-    camara = CameraSerial(port='/dev/cu.usbserial-210', baud_rate=460800)
+    puerto_camara = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
+    camara = CameraSerial(port=puerto_camara, baud_rate=460800)
 
     try:
         while True:

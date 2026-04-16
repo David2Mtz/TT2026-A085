@@ -3,6 +3,7 @@ import sys
 import os
 import cv2
 import time
+from dotenv import load_dotenv
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
 
@@ -12,11 +13,14 @@ from modules.pastillas_detector import process_pastillas_frame
 from modules.detectarColor import process_color_frame
 from modules.mouth_detector import get_mouth_coordinates
 
+# Cargar variables de entorno
+load_dotenv()
+
 # ===============================================================
 # --- CONFIGURACIÓN PRINCIPAL ---
 # ===============================================================
-PUERTO_CAMARA = '/dev/cu.usbserial-210' 
-PUERTO_BRAZO = '/dev/ttyUSB0'
+PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
+PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
 
 # Color objetivo a buscar (Asegúrate de que inicie en mayúscula para coincidir con get_color_name)
 COLOR_OBJETIVO = "Azul" 

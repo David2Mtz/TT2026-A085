@@ -1,13 +1,17 @@
 # utils/flujo_camara.py
+import os
 import serial
 import cv2
 import numpy as np
 import time
 import struct
+from dotenv import load_dotenv
+
+load_dotenv()
 
 class CameraSerial:
-    def __init__(self, port='/dev/cu.usbserial-210', baud_rate=2000000):
-        self.port = port
+    def __init__(self, port=None, baud_rate=2000000):
+        self.port = port or os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
         self.baud_rate = baud_rate
         self.ser = None
         self.conectar()

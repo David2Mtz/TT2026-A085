@@ -1,15 +1,21 @@
 # app/happyPath.py
+import os
 import cv2
 import time
+from dotenv import load_dotenv
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
-from modules.pastillas_detector import process_pastillas_frame
-from modules.detectarColor import process_color_frame
+
+# Cargar variables de entorno
+load_dotenv()
 
 def main():
     # Inicialización
-    camara = CameraSerial(port='/dev/cu.usbserial-210', baud_rate=460800)
-    brazo = ArmController(puerto='/dev/ttyUSB0', baudios=9600)
+    puerto_camara = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
+    puerto_brazo = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
+    
+    camara = CameraSerial(port=puerto_camara, baud_rate=460800)
+    brazo = ArmController(puerto=puerto_brazo, baudios=9600)
     
     # El bucle SIEMPRE inicia en HOME
     estado_actual = "INICIO_HOME"

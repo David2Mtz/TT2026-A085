@@ -10,6 +10,11 @@ from utils.flujo_camara import CameraSerial
 from modules.detectarColor import process_color_frame
 from modules.mouth_detector import get_mouth_coordinates
 
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
+
 # --- MOCKS DEL ROBOT (Reemplazar con tu lógica de comunicación real) ---
 def enviar_coordenadas_brazo(x, y, z=None):
     print(f"[ROBOT] Moviendo a coordenadas X:{x}, Y:{y} " + (f"Z:{z}" if z else ""))
@@ -37,7 +42,8 @@ def main():
     X_ENTREGA = 500
     Y_ENTREGA = 500
 
-    camara = CameraSerial(port='/dev/cu.usbserial-210', baud_rate=460800)
+    puerto_camara = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
+    camara = CameraSerial(port=puerto_camara, baud_rate=460800)
 
     print("\n================ INICIANDO HAPPY PATH MANUAL ================")
     print("Presiona la tecla 'n' o 'N' en la ventana de video para avanzar al siguiente estado.")

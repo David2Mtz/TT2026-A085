@@ -4,6 +4,8 @@ import os
 import cv2
 import time
 
+from dotenv import load_dotenv
+
 # --- Agregamos la ruta raíz del proyecto para poder importar los módulos ---
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
 
@@ -12,12 +14,15 @@ from modules.arm_controller import ArmController
 from modules.pastillas_detector import process_pastillas_frame
 from modules.mouth_detector import get_mouth_coordinates
 
+# Cargar variables de entorno
+load_dotenv()
+
 # ===============================================================
 # --- CONFIGURACIÓN PRINCIPAL ---
 # ===============================================================
 # ¡¡¡IMPORTANTE!!! Modifica estos puertos según tu sistema operativo
-PUERTO_CAMARA = '/dev/ttyUSB1' # Reemplazar por tu puerto de ESP32-CAM
-PUERTO_BRAZO = '/dev/ttyUSB0'           # Reemplazar por tu puerto de ESP32 del brazo
+PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1') # Reemplazar por tu puerto de ESP32-CAM
+PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')           # Reemplazar por tu puerto de ESP32 del brazo
 
 # --- PARÁMETROS DE COMPORTAMIENTO ---
 COLOR_BASE_PASTILLERO = "azul" # Color de la base donde están las pastillas ('rojo', 'verde' o 'azul')
