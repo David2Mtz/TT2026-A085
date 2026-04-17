@@ -17,14 +17,17 @@ class CameraSerial:
         self.conectar()
 
     def conectar(self):
-        print(f"Iniciando conexión en {self.port}...")
+        print(f"Intentando abrir puerto serial de cámara: {self.port} a {self.baud_rate}...")
         try:
+            # Añadimos un pequeño log antes de la llamada bloqueante
+            print("   [DEBUG] Abriendo objeto Serial...")
             self.ser = serial.Serial(self.port, self.baud_rate, timeout=1.0)
+            print("   [DEBUG] Puerto abierto, esperando 2s para estabilización...")
             time.sleep(2) 
             self.ser.reset_input_buffer() 
             print("Cámara ESP32 conectada exitosamente.")
         except Exception as e:
-            print(f"Error al abrir el puerto: {e}")
+            print(f"Error crítico al abrir el puerto de cámara: {e}")
             self.ser = None
 
     def get_frame(self, max_intentos=3):

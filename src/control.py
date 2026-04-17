@@ -5,7 +5,7 @@ import cv2
 import time
 from dotenv import load_dotenv
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
@@ -167,9 +167,12 @@ def main():
     except KeyboardInterrupt:
         print("\n[INFO] Ejecución interrumpida por el usuario.")
     finally:
+        print("\n[INFO] Finalizando programa. Regresando brazo a HOME...")
         brazo.mover_a_estado("HOME")
+        brazo.cerrar()
         camara.liberar()
         cv2.destroyAllWindows()
+        print("[INFO] Recursos liberados correctamente.")
 
 if __name__ == "__main__":
     main()

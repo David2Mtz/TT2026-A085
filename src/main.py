@@ -7,7 +7,7 @@ import time
 from dotenv import load_dotenv
 
 # --- Agregamos la ruta raíz del proyecto para poder importar los módulos ---
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
@@ -178,13 +178,14 @@ def main():
         print("\nEjecución detenida por el usuario.")
     finally:
         # --- Secuencia de apagado seguro ---
-        print("Cerrando conexiones y liberando recursos...")
+        print("\n[INFO] Finalizando programa. Regresando brazo a HOME...")
         if 'brazo' in locals():
-            brazo.mover_a_estado("HOME") # Siempre intenta volver a home al salir
+            brazo.mover_a_estado("HOME")
+            brazo.cerrar()
         if 'camara' in locals():
             camara.liberar()
         cv2.destroyAllWindows()
-        print("Programa finalizado.")
+        print("[INFO] Recursos liberados correctamente.")
 
 if __name__ == '__main__':
     main()
