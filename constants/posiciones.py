@@ -5,23 +5,23 @@
 POSICIONES = {
     # Se llama en el estado: INICIO_HOME y al terminar SOLTAR
     "HOME": [
-        (0, 0),   # Base
+        (0, 90),   # Base
         (1, 180), # Hombro
         (4, 120),  # Muñeca (Pitch)
-        (3, 150), # Codo
+        (3, 140), # Codo
         (5, 90),  # Rotador (Roll)
-        (6, 0)    # Pinza (Abierta)
+        (6, 88)    # Pinza (Abierta)
     ],
     
     # Se llama en el estado: OBSERVAR_COLORES
     # Posición alta para que la cámara vea toda la zona de pastilleros
     "OBSERVACION": [
-        (0, 0),   # Base (Frente)
+        (0, 90),   # Base (Frente)
         (3, 60),  # Codo flexionado para apuntar la cámara
         (1, 70),  # Hombro inclinado sobre la mesa
         (4, 180), # Muñeca (Pitch) apuntando hacia abajo
         (5, 90),  # Rotador (Roll) nivelado
-        (6, 90)   # Pinza semi-abierta
+        (6, 44)   # Pinza semi-abierta
     ],
     
     # Se llama en el estado: RECOLECCION
@@ -35,9 +35,10 @@ POSICIONES = {
     # Se llama en el estado: OBSERVACION_MANIQUI
     # Posición inicial apuntando hacia el rostro para que el IBVS busque la boca
     "ENTREGA": [
-        (0, 45),   # Regresar base al frente
+        (0, 150),   # Regresar base al frente
         (3, 120), 
         (4, 90),
-        (1, 140) # Posición hacia la cara del usuario
+        (1, 140), # Posición hacia la cara del usuario
+        (6, 0)
     ]
 }

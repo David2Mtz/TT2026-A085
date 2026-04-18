@@ -50,10 +50,13 @@ def process_color_frame(frame):
     dibuja los resultados y devuelve (frame_modificado, arreglo_colores).
     """
     height, width, _ = frame.shape
-    roi_size = 100
+    
+    # Definir dimensiones basadas en proporciones (ej: 15% del ancho para el cuadro)
+    roi_size = int(width * 0.15)
+    gap = int(width * 0.10)
+    
     roi_half = roi_size // 2
     roi_area = roi_size * roi_size 
-    gap = 100
 
     # Puntos centrales
     cx = width // 2

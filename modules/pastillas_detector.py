@@ -46,7 +46,7 @@ def find_base(hsv_frame, base_color_name):
         
     return largest_contour, base_color_mask
 
-def process_pastillas_frame(frame, color_base, offset_y=60):
+def process_pastillas_frame(frame, color_base, offset_y=40):
     """
     Recibe un frame de la ESP32-CAM.
     offset_y: Desplazamiento en pixeles porque la pinza está debajo de la cámara.

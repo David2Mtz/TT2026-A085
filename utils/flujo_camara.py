@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class CameraSerial:
-    def __init__(self, port=None, baud_rate=2000000):
+    def __init__(self, port=None, baud_rate=460800):
         self.port = port or os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
         self.baud_rate = baud_rate
         self.ser = None
@@ -81,6 +81,10 @@ class CameraSerial:
             frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
 
             if frame is not None:
+                # --- Rotación de Imagen ---
+                # Opciones: cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE
+                frame = cv2.rotate(frame, cv2.ROTATE_180)
+                
                 return frame 
             else:
                 print(f"[Intento {intento+1}] Error al decodificar la imagen.")

@@ -13,6 +13,7 @@ class ArmController:
         self.baudios = baudios
         # Estado inicial (Gemelo Digital)
         self.estado_actual = {0: 0, 1: 180, 3: 170, 4: 90, 5: 90, 6: 10}
+        self.intentos_y = 0 # Contador para asistencia del servo 3
         self.esp32 = None
         self.conectar()
 
@@ -118,7 +119,7 @@ class ArmController:
         tolerancia = 10
         kp_x = 0.02  # Ganancia proporcional para X
         kp_y = 0.02  # Ganancia proporcional para Y
-        max_paso = 6 # Límite de grados por movimiento
+        max_paso = 3 # Límite de grados por movimiento
         
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
             return True # Centrado
@@ -146,8 +147,19 @@ class ArmController:
             paso_y = 1 if error_y > 0 else -1
             
         if abs(error_y) > tolerancia:
-            nuevo_angulo = self.estado_actual[4] + paso_y
-            cmds.append((4, nuevo_angulo))
+            self.intentos_y += 1
+            nuevo_angulo_4 = self.estado_actual[4] + paso_y
+            cmds.append((4, nuevo_angulo_4))
+            
+            # Si después de 5 intentos el servo 4 no es suficiente, movemos el servo 3 un poquito
+            if self.intentos_y >= 5:
+                print(f"[ASISTENCIA] Servo 4 lento, moviendo Servo 3 para ayudar (Error Y: {error_y})")
+                paso_3 = 1 if error_y > 0 else -1
+                nuevo_angulo_3 = self.estado_actual[3] + paso_3
+                cmds.append((3, nuevo_angulo_3))
+                self.intentos_y = 0 # Reiniciamos contador tras la asistencia
+        else:
+            self.intentos_y = 0
             
         if cmds:
             self.mover_tiempo(cmds)

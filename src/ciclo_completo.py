@@ -22,7 +22,7 @@ load_dotenv()
 # ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Azul" 
+COLOR_OBJETIVO = "Verde" 
 
 class Estado:
     HOME = "HOME"
@@ -45,6 +45,11 @@ def main():
 
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
+    
+    # Variables para el protocolo de búsqueda
+    frames_sin_pastilla = 0
+    fase_busqueda_pastilla = 0
+    direccion_base = 1
     
     print("Presiona 'n' para iniciar el ciclo, 'q' para salir.")
 
@@ -95,6 +100,8 @@ def main():
                 frame_vis, error = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
                 
                 if error:
+                    frames_sin_pastilla = 0
+                    fase_busqueda_pastilla = 0
                     # Método proporcional inteligente para el centrado
                     centrado = brazo.centrar_proporcional(error[0], error[1])
                     if centrado:
@@ -102,8 +109,28 @@ def main():
                         estado_actual = Estado.RECOLECCION
                         macro_movimiento_hecho = False
                 else:
-                    cv2.putText(frame_vis, "Rastreando pastilla...", (10, 60), 
+                    frames_sin_pastilla += 1
+                    cv2.putText(frame_vis, f"Buscando pastilla... ({frames_sin_pastilla})", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+                    
+                    if frames_sin_pastilla >= 5:
+                        frames_sin_pastilla = 0 # Reiniciamos para dar tiempo al siguiente movimiento
+                        
+                        if fase_busqueda_pastilla == 0:
+                            print("[BUSQUEDA] Fase 1: Moviendo Servo 3 hacia ARRIBA (Paso fino)")
+                            brazo.mover_tiempo([(3, brazo.estado_actual[3] - 5)])
+                            fase_busqueda_pastilla = 1
+                        elif fase_busqueda_pastilla == 1:
+                            print("[BUSQUEDA] Fase 2: Moviendo Servo 0 hacia los LADOS (Paso fino)")
+                            nuevo_angulo_0 = brazo.estado_actual[0] + (5 * direccion_base)
+                            if nuevo_angulo_0 > 45 or nuevo_angulo_0 < -45:
+                                direccion_base *= -1
+                            brazo.mover_tiempo([(0, nuevo_angulo_0)])
+                            fase_busqueda_pastilla = 2
+                        elif fase_busqueda_pastilla == 2:
+                            print("[BUSQUEDA] Fase 3: Moviendo Servo 3 hacia ABAJO (Paso fino)")
+                            brazo.mover_tiempo([(3, brazo.estado_actual[3] + 5)])
+                            fase_busqueda_pastilla = 0 # Reiniciar ciclo de búsqueda
 
             elif estado_actual == Estado.RECOLECCION:
                 print("[INFO] Ejecutando maniobra de recolección.")
