@@ -11,8 +11,8 @@ class ArmController:
     def __init__(self, puerto=None, baudios=9600):
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
-        # Estado inicial (Gemelo Digital) - Actualizado con nuevos pines
-        self.estado_actual = {0: 90, 1: 180, 3: 140, 7: 20, 10: 170, 15: 80}
+        # Estado inicial sincronizado con HOME en constantes/posiciones.py
+        self.estado_actual = {0: 90, 1: 180, 3: 140, 7: 90, 10: 0, 15: 80}
         self.intentos_y = 0 # Contador para asistencia del servo 3
         self.esp32 = None
         self.conectar()
@@ -27,78 +27,55 @@ class ArmController:
             print(f"[BRAZO] Error de conexión: {e}")
 
     def mover_a_estado(self, nombre_posicion):
-        """Busca en el diccionario y ejecuta el movimiento."""
+        """Busca en el diccionario y ejecuta el movimiento sincronizado."""
         if nombre_posicion in POSICIONES:
             print(f"\n--- [BRAZO] Moviendo a: {nombre_posicion} ---")
             movimientos = POSICIONES[nombre_posicion]
-            
-            # Si regresamos a HOME, priorizamos servos finales por seguridad
-            if nombre_posicion == "HOME":
-                print("[SEGURIDAD] Priorizando servos finales (7, 10, 15)...")
-                finales = [m for m in movimientos if m[0] in [7, 10, 15]]
-                resto = [m for m in movimientos if m[0] not in [7, 10, 15]]
-                
-                # Mover primero muñeca, rotador y pinza
-                if finales:
-                    self.mover_tiempo(finales, forzar=True)
-                # Luego mover base, hombro y codo
-                if resto:
-                    self.mover_tiempo(resto, forzar=True)
-            else:
-                # Movimiento normal para cualquier otra posición
-                self.mover_tiempo(movimientos, forzar=True)
+            # Enviamos todo en un solo bloque para que el ESP32 gestione la suavidad
+            self.mover_tiempo(movimientos, forzar=True)
         else:
             print(f"[ERROR] Posición {nombre_posicion} no definida.")
 
     def mover_tiempo(self, movimientos, forzar=False):
-        """Envía comandos en bloques de 4 servos y espera confirmación 'OK'."""
+        """Envía comandos en un solo bloque sincronizado para suavidad."""
         if not self.esp32 or not self.esp32.is_open:
             return
 
-        # Filtrar solo los que realmente cambian y asegurar rango 0-180
         necesarios = []
         for p, a in movimientos:
-            # Asegurar que el ángulo esté entre 0 y 180
             angulo_seguro = max(0, min(180, a))
             if forzar or self.estado_actual.get(p) != angulo_seguro:
                 necesarios.append((p, angulo_seguro))
         
         if not necesarios: return
 
-        # Limpiar basura previa solo una vez al inicio de la ráfaga
-        self.esp32.reset_input_buffer()
-
-        # Enviar de 1 en 1 para máxima fiabilidad en la recepción del ESP32
-        for p, a in necesarios:
-            print(f"   -> Enviando Servo {p} a {a}...", end=" ", flush=True)
-            cadena = f"{p},{a}\n"
-            try:
-                self.esp32.write(cadena.encode('utf-8'))
-                self.esp32.flush()
+        # Construir cadena sincronizada: "pin,ang;pin,ang;..."
+        cadena = ";".join([f"{p},{a}" for p, a in necesarios]) + "\n"
+        
+        try:
+            self.esp32.reset_input_buffer()
+            print(f"   -> [SINCRONIZADO] Enviando: {cadena.strip()}...", end=" ", flush=True)
+            self.esp32.write(cadena.encode('utf-8'))
+            self.esp32.flush()
+            
+            # Espera el OK del ESP32
+            timeout_espera = time.time() + 5.0 
+            confirmado = False
+            while time.time() < timeout_espera:
+                if self.esp32.in_waiting > 0:
+                    respuesta = self.esp32.read(self.esp32.in_waiting).decode('utf-8', errors='ignore')
+                    if "OK" in respuesta.upper():
+                        for p, a in necesarios: self.estado_actual[p] = a
+                        confirmado = True
+                        print("OK")
+                        break
+                time.sleep(0.01)
+            
+            if not confirmado: print("TIMEOUT")
+            time.sleep(0.05) # Pausa post-movimiento
                 
-                # Espera síncrona del OK con mayor margen de tiempo
-                timeout_espera = time.time() + 5.0 
-                confirmado = False
-                while time.time() < timeout_espera:
-                    if self.esp32.in_waiting > 0:
-                        # Leer todo lo disponible y buscar "OK"
-                        respuesta = self.esp32.read(self.esp32.in_waiting).decode('utf-8', errors='ignore')
-                        if "OK" in respuesta.upper():
-                            self.estado_actual[p] = a
-                            confirmado = True
-                            print("OK")
-                            break
-                    time.sleep(0.01)
-                
-                if not confirmado:
-                    print("TIMEOUT")
-                    print(f"[BRAZO] Advertencia: No se recibió confirmación para servo {p}")
-                
-                # Pequeña pausa para estabilidad eléctrica
-                time.sleep(0.02)
-                
-            except Exception as e:
-                print(f"ERROR: {e}")
+        except Exception as e:
+            print(f"ERROR SERIAL: {e}")
 
     def cerrar(self):
         """Cierra la conexión serial de forma segura."""

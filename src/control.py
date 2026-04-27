@@ -19,7 +19,7 @@ load_dotenv()
 # ===============================================================
 # --- CONFIGURACIÓN PRINCIPAL ---
 # ===============================================================
-PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
+PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
 
 # Color objetivo a buscar (Asegúrate de que inicie en mayúscula para coincidir con get_color_name)
@@ -117,7 +117,7 @@ def main():
                 print("[INFO] Ejecutando maniobra de recolección.")
                 brazo.mover_tiempo([(1, 100), (3, 80)]) # Bajar
                 time.sleep(0.5)
-                brazo.mover_tiempo([(6, 110)])          # Agarrar
+                brazo.mover_tiempo([(15, 110)])          # Agarrar (Pin 15)
                 time.sleep(0.5)
                 brazo.mover_a_estado("PRE_RECOLECCION") # Levantar carga
                 
@@ -153,7 +153,7 @@ def main():
             # =================================================
             elif estado_actual == Estado.SOLTAR:
                 print("[INFO] Liberando pastilla.")
-                brazo.mover_tiempo([(6, 0)]) 
+                brazo.mover_tiempo([(15, 0)]) # Abrir pinza (Pin 15)
                 time.sleep(1)
                 
                 print("[INFO] Ciclo finalizado. Regresando a HOME.")

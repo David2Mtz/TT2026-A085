@@ -20,7 +20,7 @@ load_dotenv()
 # ===============================================================
 # --- CONFIGURACIÓN PRINCIPAL ---
 # ===============================================================
-PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
+PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
 COLOR_OBJETIVO = "Verde" 
 
@@ -81,14 +81,17 @@ def main():
 
             elif estado_actual == Estado.OBSERVACION:
                 if not macro_movimiento_hecho:
+                    print("[MOVIMIENTO] Moviendo a zona de observación...")
                     brazo.mover_a_estado("OBSERVACION")
-                    time.sleep(1)
+                    print("[MOVIMIENTO] Llegada a observación confirmada. Iniciando visión.")
+                    time.sleep(1.5) # Pausa extra para estabilizar la cámara
                     macro_movimiento_hecho = True
                 
                 frame_vis, colores = process_color_frame(frame_vis)
                 
-                if COLOR_OBJETIVO in colores:
-                    print(f"[INFO] Color {COLOR_OBJETIVO} localizado. Iniciando recolección directa.")
+                # Solo buscamos el color si ya estamos en posición de observación
+                if macro_movimiento_hecho and (COLOR_OBJETIVO in colores):
+                    print(f"[INFO] Objetivo '{COLOR_OBJETIVO}' detectado. Transicionando a RECOLECCION.")
                     estado_actual = Estado.RECOLECCION
                     macro_movimiento_hecho = False
                 else:
@@ -107,26 +110,21 @@ def main():
                     # 1. Centrado Proporcional (Servo 0 y 7)
                     brazo.centrar_proporcional(ex, ey)
                     
-                    # 2. Descenso dinámico simultáneo (Uso de Servos 3 y 7)
-                    # "Casi centrado": Bajamos el umbral de 45 a 25 para mayor precisión
-                    if abs(ex) < 25 and abs(ey) < 25:
-                        print(f"[RECOLECCION] Acercamiento final (Error X:{ex} Y:{ey})")
-                        paso_bajada = 3
-                        # Bajamos con Servo 3 (Codo) y Servo 7 (Muñeca - antiguo 4)
-                        next_3 = max(20, brazo.estado_actual[3] - paso_bajada)
-                        # El servo 7 ya se mueve con centrar_proporcional, pero aquí 
-                        # forzamos un avance en la profundidad si es necesario
-                        next_7 = min(180, brazo.estado_actual[7] + 1) 
-                        
-                        if next_3 != brazo.estado_actual[3] or next_7 != brazo.estado_actual[7]:
+                    # 2. Descenso dinámico CONSTANTE para suavidad (Paso fijo)
+                    if abs(ex) < 35 and abs(ey) < 35:
+                        paso_bajada = 3 # Paso fijo para fluidez del ESP32
+                        if area < 5500:
+                            next_3 = max(20, brazo.estado_actual[3] - paso_bajada)
+                            # Compensación para mantener cámara alineada
+                            next_7 = min(180, brazo.estado_actual[7] + 1)
                             brazo.mover_tiempo([(3, next_3), (7, next_7)])
                     
-                    # 3. Captura Inteligente: Si el área es > 5500, la pastilla está en la pinza
-                    if area > 5500:
-                        print(f"[VISION] Objetivo en rango de captura (Area: {int(area)}). Cerrando.")
-                        brazo.mover_tiempo([(15, 0)]) # Cierre completo (0 grados cierra)
-                        time.sleep(0.5)
-                        brazo.mover_a_estado("PRE_RECOLECCION") # Maniobra de seguridad
+                    # 3. Captura Inteligente: Umbral 6000 para contacto
+                    if area > 6000:
+                        print(f"[VISION] OBJETIVO ALCANZADO (Area: {int(area)}). Cerrando Pinza.")
+                        brazo.mover_tiempo([(15, 0)]) # Cierre completo (0 grados)
+                        time.sleep(0.8)
+                        brazo.mover_a_estado("PRE_RECOLECCION") 
                         estado_actual = Estado.OBSERVACION_MANIQUI
                         macro_movimiento_hecho = False
                 else:
@@ -207,11 +205,22 @@ def main():
 
     except KeyboardInterrupt:
         print("\n[INFO] Ejecución cancelada por el usuario.")
+    except Exception as e:
+        print(f"\n[ERROR CRÍTICO] {e}")
     finally:
-        print("[INFO] Limpiando recursos y regresando a HOME.")
-        brazo.mover_a_estado("HOME")
-        brazo.cerrar()
-        camara.liberar()
+        print("\n[SEGURIDAD] Iniciando secuencia de apagado suave...")
+        try:
+            # Reintentar conexión si se cerró bruscamente
+            if not brazo.esp32 or not brazo.esp32.is_open:
+                brazo.conectar()
+            
+            # Regresar a HOME usando la lógica sincronizada
+            brazo.mover_a_estado("HOME")
+            time.sleep(2) # Dar tiempo para terminar el movimiento
+            brazo.cerrar()
+            camara.liberar()
+        except:
+            print("[ADVERTENCIA] No se pudo completar el regreso a HOME de forma segura.")
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
