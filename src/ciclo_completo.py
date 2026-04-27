@@ -88,63 +88,73 @@ def main():
                 frame_vis, colores = process_color_frame(frame_vis)
                 
                 if COLOR_OBJETIVO in colores:
-                    print(f"[INFO] Color {COLOR_OBJETIVO} localizado. Iniciando rastreo.")
-                    estado_actual = Estado.SEGUIMIENTO_PASTILLA
+                    print(f"[INFO] Color {COLOR_OBJETIVO} localizado. Iniciando recolección directa.")
+                    estado_actual = Estado.RECOLECCION
                     macro_movimiento_hecho = False
                 else:
                     cv2.putText(frame_vis, f"Buscando color: {COLOR_OBJETIVO}", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
-            elif estado_actual == Estado.SEGUIMIENTO_PASTILLA:
-                # Usamos process_pastillas_frame para obtener el error visual
-                frame_vis, error = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
+            elif estado_actual == Estado.RECOLECCION:
+                # Combinamos seguimiento y bajada dinámica en un solo estado
+                frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
                 
-                if error:
+                if info:
+                    ex, ey, area = info
                     frames_sin_pastilla = 0
                     fase_busqueda_pastilla = 0
-                    # Método proporcional inteligente para el centrado
-                    centrado = brazo.centrar_proporcional(error[0], error[1])
-                    if centrado:
-                        print("[INFO] Pastilla centrada. Iniciando recolección.")
-                        estado_actual = Estado.RECOLECCION
+                    
+                    # 1. Centrado Proporcional (Servo 0 y 7)
+                    brazo.centrar_proporcional(ex, ey)
+                    
+                    # 2. Descenso dinámico simultáneo (Uso de Servos 3 y 7)
+                    # "Casi centrado": Bajamos el umbral de 45 a 25 para mayor precisión
+                    if abs(ex) < 25 and abs(ey) < 25:
+                        print(f"[RECOLECCION] Acercamiento final (Error X:{ex} Y:{ey})")
+                        paso_bajada = 3
+                        # Bajamos con Servo 3 (Codo) y Servo 7 (Muñeca - antiguo 4)
+                        next_3 = max(20, brazo.estado_actual[3] - paso_bajada)
+                        # El servo 7 ya se mueve con centrar_proporcional, pero aquí 
+                        # forzamos un avance en la profundidad si es necesario
+                        next_7 = min(180, brazo.estado_actual[7] + 1) 
+                        
+                        if next_3 != brazo.estado_actual[3] or next_7 != brazo.estado_actual[7]:
+                            brazo.mover_tiempo([(3, next_3), (7, next_7)])
+                    
+                    # 3. Captura Inteligente: Si el área es > 5500, la pastilla está en la pinza
+                    if area > 5500:
+                        print(f"[VISION] Objetivo en rango de captura (Area: {int(area)}). Cerrando.")
+                        brazo.mover_tiempo([(15, 0)]) # Cierre completo (0 grados cierra)
+                        time.sleep(0.5)
+                        brazo.mover_a_estado("PRE_RECOLECCION") # Maniobra de seguridad
+                        estado_actual = Estado.OBSERVACION_MANIQUI
                         macro_movimiento_hecho = False
                 else:
+                    # Lógica de búsqueda corregida: - para ABAJO, + para ARRIBA
                     frames_sin_pastilla += 1
                     cv2.putText(frame_vis, f"Buscando pastilla... ({frames_sin_pastilla})", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
                     
                     if frames_sin_pastilla >= 5:
-                        frames_sin_pastilla = 0 # Reiniciamos para dar tiempo al siguiente movimiento
+                        frames_sin_pastilla = 0
                         
-                        if fase_busqueda_pastilla == 0:
-                            print("[BUSQUEDA] Fase 1: Moviendo Servo 3 hacia ARRIBA (Paso fino)")
+                        if fase_busqueda_pastilla in [0, 1, 2]:
+                            print(f"[BUSQUEDA] Paso {fase_busqueda_pastilla+1}/3 hacia ABAJO (Acercando)")
                             brazo.mover_tiempo([(3, brazo.estado_actual[3] - 5)])
-                            fase_busqueda_pastilla = 1
-                        elif fase_busqueda_pastilla == 1:
-                            print("[BUSQUEDA] Fase 2: Moviendo Servo 0 hacia los LADOS (Paso fino)")
-                            nuevo_angulo_0 = brazo.estado_actual[0] + (5 * direccion_base)
-                            if nuevo_angulo_0 > 45 or nuevo_angulo_0 < -45:
-                                direccion_base *= -1
-                            brazo.mover_tiempo([(0, nuevo_angulo_0)])
-                            fase_busqueda_pastilla = 2
-                        elif fase_busqueda_pastilla == 2:
-                            print("[BUSQUEDA] Fase 3: Moviendo Servo 3 hacia ABAJO (Paso fino)")
+                            fase_busqueda_pastilla += 1
+                        elif fase_busqueda_pastilla == 3:
+                            print("[BUSQUEDA] Regresando posición original de búsqueda")
+                            brazo.mover_tiempo([(3, brazo.estado_actual[3] + 15)])
+                            fase_busqueda_pastilla = 4
+                        elif fase_busqueda_pastilla in [4, 5, 6]:
+                            print(f"[BUSQUEDA] Paso {fase_busqueda_pastilla-3}/3 hacia ARRIBA (Alejando)")
                             brazo.mover_tiempo([(3, brazo.estado_actual[3] + 5)])
-                            fase_busqueda_pastilla = 0 # Reiniciar ciclo de búsqueda
+                            fase_busqueda_pastilla += 1
+                        elif fase_busqueda_pastilla == 7:
+                            print("[BUSQUEDA] Reiniciando ciclo de búsqueda")
+                            brazo.mover_tiempo([(3, brazo.estado_actual[3] - 15)])
+                            fase_busqueda_pastilla = 0
 
-            elif estado_actual == Estado.RECOLECCION:
-                print("[INFO] Ejecutando maniobra de recolección.")
-                # Bajar brazo (Servo 3 primero, luego 1 para evitar choque)
-                brazo.mover_tiempo([(3, 80), (1, 100)])
-                time.sleep(0.5)
-                # Cerrar pinza (Servo 6)
-                brazo.mover_tiempo([(6, 110)])
-                time.sleep(0.5)
-                # Subir para evitar colisiones
-                brazo.mover_a_estado("PRE_RECOLECCION")
-                
-                estado_actual = Estado.OBSERVACION_MANIQUI
-                macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
                 if not macro_movimiento_hecho:
@@ -181,8 +191,9 @@ def main():
 
             elif estado_actual == Estado.ENTREGA:
                 print("[INFO] Liberando carga.")
-                # Abrir pinza
-                brazo.mover_tiempo([(6, 10)])
+                # Abrir pinza (80 grados abre)
+                brazo.mover_tiempo([(15, 80)])
+
                 time.sleep(1)
                 
                 print("[INFO] Ciclo finalizado satisfactoriamente.")

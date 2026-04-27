@@ -11,8 +11,8 @@ class ArmController:
     def __init__(self, puerto=None, baudios=9600):
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
-        # Estado inicial (Gemelo Digital)
-        self.estado_actual = {0: 0, 1: 180, 3: 170, 4: 90, 5: 90, 6: 10}
+        # Estado inicial (Gemelo Digital) - Actualizado con nuevos pines
+        self.estado_actual = {0: 90, 1: 180, 3: 140, 7: 20, 10: 170, 15: 80}
         self.intentos_y = 0 # Contador para asistencia del servo 3
         self.esp32 = None
         self.conectar()
@@ -31,9 +31,22 @@ class ArmController:
         if nombre_posicion in POSICIONES:
             print(f"\n--- [BRAZO] Moviendo a: {nombre_posicion} ---")
             movimientos = POSICIONES[nombre_posicion]
-            # Usamos forzar=True para asegurar que todos los servos alcancen el ángulo,
-            # incluso si el controlador cree que ya están ahí.
-            self.mover_tiempo(movimientos, forzar=True)
+            
+            # Si regresamos a HOME, priorizamos servos finales por seguridad
+            if nombre_posicion == "HOME":
+                print("[SEGURIDAD] Priorizando servos finales (7, 10, 15)...")
+                finales = [m for m in movimientos if m[0] in [7, 10, 15]]
+                resto = [m for m in movimientos if m[0] not in [7, 10, 15]]
+                
+                # Mover primero muñeca, rotador y pinza
+                if finales:
+                    self.mover_tiempo(finales, forzar=True)
+                # Luego mover base, hombro y codo
+                if resto:
+                    self.mover_tiempo(resto, forzar=True)
+            else:
+                # Movimiento normal para cualquier otra posición
+                self.mover_tiempo(movimientos, forzar=True)
         else:
             print(f"[ERROR] Posición {nombre_posicion} no definida.")
 
@@ -106,10 +119,10 @@ class ArmController:
         if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso))
         elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso))
         
-        # Ajuste Y (Vertical) -> Muñeca (Servo 4)
+        # Ajuste Y (Vertical) -> Muñeca (Servo 7 - ANTES PIN 4)
         # Si el error es positivo (objeto abajo), sumamos para bajar la pinza (180 es abajo)
-        if error_y > tolerancia: cmds.append((4, self.estado_actual[4] + paso))
-        elif error_y < -tolerancia: cmds.append((4, self.estado_actual[4] - paso))
+        if error_y > tolerancia: cmds.append((7, self.estado_actual[7] + paso))
+        elif error_y < -tolerancia: cmds.append((7, self.estado_actual[7] - paso))
         
         if cmds: self.mover_tiempo(cmds)
         return False
@@ -134,26 +147,26 @@ class ArmController:
         # Forzamos al menos 1 grado de movimiento si supera la tolerancia
         if paso_x == 0 and abs(error_x) > tolerancia:
             paso_x = 1 if error_x > 0 else -1
-        
+
         if abs(error_x) > tolerancia:
             nuevo_angulo = self.estado_actual[0] + paso_x
             cmds.append((0, nuevo_angulo))
-            
-        # Ajuste Y (Vertical) -> Muñeca (Servo 4)
+
+        # Ajuste Y (Vertical) -> Muñeca (Servo 7 - ANTES PIN 4)
         paso_y = int(error_y * kp_y)
         if abs(paso_y) > max_paso:
             paso_y = max_paso if paso_y > 0 else -max_paso
         if paso_y == 0 and abs(error_y) > tolerancia:
             paso_y = 1 if error_y > 0 else -1
-            
+
         if abs(error_y) > tolerancia:
             self.intentos_y += 1
-            nuevo_angulo_4 = self.estado_actual[4] + paso_y
-            cmds.append((4, nuevo_angulo_4))
+            nuevo_angulo_7 = self.estado_actual[7] + paso_y
+            cmds.append((7, nuevo_angulo_7))
             
-            # Si después de 5 intentos el servo 4 no es suficiente, movemos el servo 3 un poquito
+            # Si después de 5 intentos el servo 7 no es suficiente, movemos el servo 3 un poquito
             if self.intentos_y >= 5:
-                print(f"[ASISTENCIA] Servo 4 lento, moviendo Servo 3 para ayudar (Error Y: {error_y})")
+                print(f"[ASISTENCIA] Servo 7 lento, moviendo Servo 3 para ayudar (Error Y: {error_y})")
                 paso_3 = 1 if error_y > 0 else -1
                 nuevo_angulo_3 = self.estado_actual[3] + paso_3
                 cmds.append((3, nuevo_angulo_3))
@@ -165,3 +178,4 @@ class ArmController:
             self.mover_tiempo(cmds)
             
         return False
+

@@ -22,7 +22,7 @@ def calibrar():
     print("[INFO] Moviendo a posición de OBSERVACION...")
     brazo.mover_a_estado("OBSERVACION")
     
-    offset_y = 60 # Valor inicial por defecto
+    offset_y = 75 # Valor inicial por defecto
     print("\n--- MODO CALIBRACIÓN DE PINZA ---")
     print("Usa 'w' para aumentar el offset (bajar cruceta)")
     print("Usa 's' para disminuir el offset (subir cruceta)")
@@ -65,6 +65,8 @@ def calibrar():
                 
     finally:
         print(f"\n[CALIBRACIÓN FINALIZADA] El valor de offset_y ideal es: {offset_y}")
+        print("[INFO] Moviendo a posición de home...")
+        brazo.mover_a_estado("HOME")
         camara.liberar()
         brazo.cerrar()
         cv2.destroyAllWindows()

@@ -83,7 +83,7 @@ class CameraSerial:
             if frame is not None:
                 # --- Rotación de Imagen ---
                 # Opciones: cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE
-                frame = cv2.rotate(frame, cv2.ROTATE_180)
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
                 
                 return frame 
             else:

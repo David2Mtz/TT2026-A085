@@ -46,15 +46,16 @@ def find_base(hsv_frame, base_color_name):
         
     return largest_contour, base_color_mask
 
-def process_pastillas_frame(frame, color_base, offset_y=40):
+def process_pastillas_frame(frame, color_base, offset_y=77, offset_x=-30):
     """
     Recibe un frame de la ESP32-CAM.
-    offset_y: Desplazamiento en pixeles porque la pinza está debajo de la cámara.
-    Retorna el frame anotado y la tupla de error (error_x, error_y) desde el centro ajustado.
+    offset_y: Desplazamiento hacia abajo.
+    offset_x: Desplazamiento hacia la izquierda (negativo).
+    Retorna el frame anotado y la tupla de error (error_x, error_y, area).
     """
     alto, ancho = frame.shape[:2]
-    # El centro objetivo ahora está desplazado hacia abajo en el eje Y
-    cx_pantalla, cy_pantalla = ancho // 2, (alto // 2) + offset_y
+    # El centro objetivo ahora está desplazado en X e Y
+    cx_pantalla, cy_pantalla = (ancho // 2) + offset_x, (alto // 2) + offset_y
     
     hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     base_contour, base_color_mask = find_base(hsv_frame, color_base)
@@ -88,10 +89,11 @@ def process_pastillas_frame(frame, color_base, offset_y=40):
                     cx_pastilla = int(M["m10"] / M["m00"])
                     cy_pastilla = int(M["m01"] / M["m00"])
                     
-                    # Calcular error relativo al centro
+                    # Calcular error relativo al centro y obtener área
                     error_x = cx_pastilla - cx_pantalla
                     error_y = cy_pastilla - cy_pantalla
-                    error_tracking = (error_x, error_y)
+                    area = M["m00"]
+                    error_tracking = (error_x, error_y, area)
                     
                     # Dibujar rastreo
                     (x, y, w, h) = cv2.boundingRect(selected_pill)
