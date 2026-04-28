@@ -36,7 +36,7 @@ class Estado:
 def main():
     print("--- INICIANDO CICLO AUTÓNOMO IBVS ---")
     camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
-    brazo = ArmController(puerto=PUERTO_BRAZO, baudios=9600)
+    brazo = ArmController(puerto=PUERTO_BRAZO, baudios=115200)
     
     estado_actual = Estado.INICIO_HOME
     macro_movimiento_hecho = False 

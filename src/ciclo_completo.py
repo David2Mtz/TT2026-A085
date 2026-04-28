@@ -34,11 +34,12 @@ class Estado:
     ENTREGA = "ENTREGA"
 
 def main():
-    print("--- INICIANDO CICLO COMPLETO CON SEGUIMIENTO PROPORCIONAL ---")
+    print("--- INICIANDO CICLO COMPLETO CON SENSOR DE DISTANCIA ToF ---")
     
     try:
         camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
-        brazo = ArmController(puerto=PUERTO_BRAZO, baudios=9600)
+        # Actualizado a 115200 baudios para el nuevo firmware con ToF
+        brazo = ArmController(puerto=PUERTO_BRAZO, baudios=115200)
     except Exception as e:
         print(f"[ERROR] No se pudo inicializar el hardware: {e}")
         return
@@ -46,23 +47,35 @@ def main():
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
     
-    # Variables para el protocolo de búsqueda
+    # Offsets del sensor (mm)
+    OFFSET_PINZA_ABIERTA = 60 
+    UMBRAL_RECOLECCION = OFFSET_PINZA_ABIERTA + 5 # 65mm (5mm de margen sobre el suelo)
+    
     frames_sin_pastilla = 0
     fase_busqueda_pastilla = 0
-    direccion_base = 1
     
     print("Presiona 'n' para iniciar el ciclo, 'q' para salir.")
 
     try:
         while True:
             frame = camara.get_frame()
-            if frame is None:
-                continue
+            if frame is None: continue
 
             frame_vis = frame.copy()
+            dist_actual = brazo.obtener_distancia() # Nueva lectura del ToF
+            
             key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
-                break
+            if key == ord('q'): break
+
+            # Dibujar distancia (Z) y ángulos de servos coordinados
+            z_coord = dist_actual
+            color_z = (0, 255, 0) if z_coord < 80 else (0, 255, 255)
+            cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), 
+                        cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
+            
+            s1, s3, s7 = brazo.estado_actual[1], brazo.estado_actual[3], brazo.estado_actual[7]
+            cv2.putText(frame_vis, f"S1:{s1} | S3:{s3} | S7:{s7}", (10, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
@@ -70,10 +83,11 @@ def main():
 
             if estado_actual == Estado.HOME:
                 if not macro_movimiento_hecho:
-                    brazo.mover_a_estado("HOME")
+                    print("[MOVIMIENTO] Sincronizando posición HOME...")
+                    brazo.mover_a_estado("HOME", forzar=True)
                     macro_movimiento_hecho = True
                 
-                cv2.putText(frame_vis, "HOME - Esperando 'n'", (10, 30), 
+                cv2.putText(frame_vis, "HOME - Esperando 'n'", (10, 100), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 if key == ord('n'):
                     estado_actual = Estado.OBSERVACION
@@ -83,75 +97,55 @@ def main():
                 if not macro_movimiento_hecho:
                     print("[MOVIMIENTO] Moviendo a zona de observación...")
                     brazo.mover_a_estado("OBSERVACION")
-                    print("[MOVIMIENTO] Llegada a observación confirmada. Iniciando visión.")
-                    time.sleep(1.5) # Pausa extra para estabilizar la cámara
+                    time.sleep(2) # Esperar a que la imagen se estabilice
                     macro_movimiento_hecho = True
                 
                 frame_vis, colores = process_color_frame(frame_vis)
                 
-                # Solo buscamos el color si ya estamos en posición de observación
                 if macro_movimiento_hecho and (COLOR_OBJETIVO in colores):
                     print(f"[INFO] Objetivo '{COLOR_OBJETIVO}' detectado. Transicionando a RECOLECCION.")
                     estado_actual = Estado.RECOLECCION
                     macro_movimiento_hecho = False
                 else:
-                    cv2.putText(frame_vis, f"Buscando color: {COLOR_OBJETIVO}", (10, 60), 
+                    cv2.putText(frame_vis, f"Buscando color: {COLOR_OBJETIVO}...", (10, 130), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
             elif estado_actual == Estado.RECOLECCION:
-                # Combinamos seguimiento y bajada dinámica en un solo estado
                 frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
                 
                 if info:
                     ex, ey, area = info
                     frames_sin_pastilla = 0
-                    fase_busqueda_pastilla = 0
                     
-                    # 1. Centrado Proporcional (Servo 0 y 7)
+                    # 1. Centrado Proporcional (Base y Muñeca)
                     brazo.centrar_proporcional(ex, ey)
                     
-                    # 2. Descenso dinámico CONSTANTE para suavidad (Paso fijo)
-                    if abs(ex) < 35 and abs(ey) < 35:
-                        paso_bajada = 3 # Paso fijo para fluidez del ESP32
-                        if area < 5500:
-                            next_3 = max(20, brazo.estado_actual[3] - paso_bajada)
-                            # Compensación para mantener cámara alineada
-                            next_7 = min(180, brazo.estado_actual[7] + 1)
-                            brazo.mover_tiempo([(3, next_3), (7, next_7)])
-                    
-                    # 3. Captura Inteligente: Umbral 6000 para contacto
-                    if area > 6000:
-                        print(f"[VISION] OBJETIVO ALCANZADO (Area: {int(area)}). Cerrando Pinza.")
-                        brazo.mover_tiempo([(15, 0)]) # Cierre completo (0 grados)
-                        time.sleep(0.8)
-                        brazo.mover_a_estado("PRE_RECOLECCION") 
-                        estado_actual = Estado.OBSERVACION_MANIQUI
-                        macro_movimiento_hecho = False
+                    # 2. Descenso dinámico COORDINADO (S1 y S3 hacia 0 para BAJAR)
+                    if abs(ex) < 45 and abs(ey) < 45:
+                        if z_coord > UMBRAL_RECOLECCION:
+                            # Bajamos disminuyendo ángulos de Hombro y Codo
+                            next_1 = max(5, brazo.estado_actual[1] - 2)
+                            next_3 = max(5, brazo.estado_actual[3] - 1) 
+                            
+                            # S7 debe subir (hacia 180) para compensar que el brazo se inclina hacia adelante
+                            next_7 = min(180, brazo.estado_actual[7] + 2)
+                            
+                            print(f"[DEBUG] Bajando coordinado: S1={next_1}, S3={next_3} | Z={z_coord}mm")
+                            brazo.mover_tiempo([(1, next_1), (3, next_3), (7, next_7)])
+                        else:
+                            # 3. Captura por Proximidad ToF
+                            print(f"[ToF] CONTACTO! (Z: {z_coord}mm). Cerrando Pinza.")
+                            brazo.mover_tiempo([(15, 0)]) 
+                            time.sleep(1.2)
+                            brazo.mover_a_estado("PRE_RECOLECCION") 
+                            estado_actual = Estado.OBSERVACION_MANIQUI
+                            macro_movimiento_hecho = False
                 else:
-                    # Lógica de búsqueda corregida: - para ABAJO, + para ARRIBA
                     frames_sin_pastilla += 1
-                    cv2.putText(frame_vis, f"Buscando pastilla... ({frames_sin_pastilla})", (10, 60), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
-                    
-                    if frames_sin_pastilla >= 5:
-                        frames_sin_pastilla = 0
-                        
-                        if fase_busqueda_pastilla in [0, 1, 2]:
-                            print(f"[BUSQUEDA] Paso {fase_busqueda_pastilla+1}/3 hacia ABAJO (Acercando)")
-                            brazo.mover_tiempo([(3, brazo.estado_actual[3] - 5)])
-                            fase_busqueda_pastilla += 1
-                        elif fase_busqueda_pastilla == 3:
-                            print("[BUSQUEDA] Regresando posición original de búsqueda")
-                            brazo.mover_tiempo([(3, brazo.estado_actual[3] + 15)])
-                            fase_busqueda_pastilla = 4
-                        elif fase_busqueda_pastilla in [4, 5, 6]:
-                            print(f"[BUSQUEDA] Paso {fase_busqueda_pastilla-3}/3 hacia ARRIBA (Alejando)")
-                            brazo.mover_tiempo([(3, brazo.estado_actual[3] + 5)])
-                            fase_busqueda_pastilla += 1
-                        elif fase_busqueda_pastilla == 7:
-                            print("[BUSQUEDA] Reiniciando ciclo de búsqueda")
-                            brazo.mover_tiempo([(3, brazo.estado_actual[3] - 15)])
-                            fase_busqueda_pastilla = 0
+                    if frames_sin_pastilla >= 15:
+                        print("[INFO] Pastilla perdida, regresando a observación.")
+                        estado_actual = Estado.OBSERVACION
+                        macro_movimiento_hecho = False
 
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:

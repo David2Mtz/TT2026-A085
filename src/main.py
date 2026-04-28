@@ -49,7 +49,7 @@ def main():
     # Nota: Asegúrate de que los dispositivos estén conectados antes de ejecutar
     try:
         camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
-        brazo = ArmController(puerto=PUERTO_BRAZO, baudios=9600)
+        brazo = ArmController(puerto=PUERTO_BRAZO, baudios=115200)
     except Exception as e:
         print(f"[ERROR CRÍTICO] No se pudo inicializar el hardware: {e}")
         print("Verifica las conexiones y los puertos en el script.")

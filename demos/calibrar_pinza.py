@@ -16,7 +16,7 @@ def calibrar():
     puerto_brazo = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
     
     camara = CameraSerial(port=puerto_cam, baud_rate=460800)
-    brazo = ArmController(puerto=puerto_brazo, baudios=9600)
+    brazo = ArmController(puerto=puerto_brazo, baudios=115200)
     
     # Mover a posición de observación para calibrar
     print("[INFO] Moviendo a posición de OBSERVACION...")

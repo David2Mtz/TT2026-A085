@@ -29,7 +29,7 @@ def main():
 
     # 1. Inicialización del Brazo primero
     try:
-        brazo = ArmController(puerto=puerto_brazo, baudios=9600)
+        brazo = ArmController(puerto=puerto_brazo, baudios=115200)
         
         print("\n[INFO] Moviendo brazo a posición de OBSERVACION...")
         brazo.mover_a_estado("OBSERVACION")
