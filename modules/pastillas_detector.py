@@ -1,6 +1,7 @@
 # modules/pastillas_detector.py
 import cv2
 import numpy as np
+from constants.config import OFFSET_X, OFFSET_Y
 
 # Se mantienen tus rangos HSV
 def get_hsv_ranges(color_name):
@@ -46,7 +47,7 @@ def find_base(hsv_frame, base_color_name):
         
     return largest_contour, base_color_mask
 
-def process_pastillas_frame(frame, color_base, offset_y=77, offset_x=-30):
+def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSET_X):
     """
     Recibe un frame de la ESP32-CAM.
     offset_y: Desplazamiento hacia abajo.
