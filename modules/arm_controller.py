@@ -12,7 +12,7 @@ class ArmController:
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial sincronizado con el firmware
-        self.estado_actual = {0: 90, 1: 180, 3: 140, 7: 90, 10: 0, 15: 80}
+        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 13: 0, 12: 80}
         self.distancia = 999
         self.intentos_y = 0
         self.esp32 = None
@@ -27,27 +27,37 @@ class ArmController:
 
     def conectar(self):
         try:
-            # Abrir puerto con DTR/RTS explícito para forzar reset
+            # Abrir puerto con parámetros que evitan el reseteo brusco si es posible
             self.esp32 = serial.Serial(self.puerto, self.baudios, timeout=0.1)
+            
+            # Forzar un reset limpio para empezar de cero
             self.esp32.setDTR(False)
-            time.sleep(0.1)
+            time.sleep(0.5)
             self.esp32.setDTR(True)
             
-            print(f"[BRAZO] Esperando a que la ESP32 esté lista...")
+            print(f"[BRAZO] Conectado en {self.puerto}. Esperando SYSTEM_READY...")
+            
+            # Limpiar basura acumulada en el puerto de la PC
+            self.esp32.reset_input_buffer()
+            self.esp32.reset_output_buffer()
+
             inicio = time.time()
             ready = False
             while time.time() - inicio < 5: 
-                linea = self.esp32.readline().decode('utf-8', errors='ignore').strip()
-                if "SYSTEM_READY" in linea:
-                    print("[BRAZO] ESP32 lista detectada.")
-                    ready = True
-                    break
+                if self.esp32.in_waiting > 0:
+                    linea = self.esp32.readline().decode('utf-8', errors='ignore').strip()
+                    if "SYSTEM_READY" in linea:
+                        print("[BRAZO] ESP32 lista y sincronizada.")
+                        ready = True
+                        break
             
             if not ready:
-                print("[BRAZO] Advertencia: No se recibió 'SYSTEM_READY', continuando de todos modos...")
+                print("[BRAZO] Advertencia: No se detectó SYSTEM_READY, el inicio podría ser brusco.")
             
+            # Un pequeño respiro antes del primer comando
+            time.sleep(0.5)
             self.esp32.reset_input_buffer()
-            print(f"[BRAZO] Conectado en {self.puerto}.")
+            
         except Exception as e:
             print(f"[BRAZO] Error de conexión: {e}")
 
@@ -112,8 +122,8 @@ class ArmController:
         if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso))
         elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso))
         
-        if error_y > tolerancia: cmds.append((7, self.estado_actual[7] + paso))
-        elif error_y < -tolerancia: cmds.append((7, self.estado_actual[7] - paso))
+        if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso))
+        elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso))
         
         if cmds: self.mover_tiempo(cmds, esperar=False) # No esperamos OK en IBVS para mayor velocidad
         return False
@@ -148,13 +158,13 @@ class ArmController:
 
         if abs(error_y) > tolerancia:
             self.intentos_y += 1
-            nuevo_angulo_7 = self.estado_actual[7] + paso_y
-            cmds.append((7, nuevo_angulo_7))
+            nuevo_angulo_15 = self.estado_actual[15] + paso_y
+            cmds.append((15, nuevo_angulo_15))
             
             if self.intentos_y >= 5:
-                paso_3 = 1 if error_y > 0 else -1
-                nuevo_angulo_3 = self.estado_actual[3] + paso_3
-                cmds.append((3, nuevo_angulo_3))
+                paso_6 = 1 if error_y > 0 else -1
+                nuevo_angulo_6 = self.estado_actual[6] + paso_6
+                cmds.append((6, nuevo_angulo_6))
                 self.intentos_y = 0 
         else:
             self.intentos_y = 0

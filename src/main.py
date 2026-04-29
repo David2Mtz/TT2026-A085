@@ -124,9 +124,9 @@ def main():
             elif estado_actual == Estado.RECOLECCION:
                 print(f"\n[ESTADO: {estado_actual}] - Ejecutando secuencia de agarre.")
                 # Secuencia de movimientos finos para el agarre
-                brazo.mover_tiempo([(1, 100), (3, 80)]) # Bajar pinza
+                brazo.mover_tiempo([(1, 100), (6, 80)]) # Bajar pinza (Codo Pin 6)
                 time.sleep(0.5)
-                brazo.mover_tiempo([(15, 0)]) # Cerrar Pinza (Pin 15)
+                brazo.mover_tiempo([(12, 0)]) # Cerrar Pinza (Pin 12)
                 time.sleep(0.5)
                 brazo.mover_a_estado("PRE_RECOLECCION") # Subir un poco antes de girar
                 
@@ -158,7 +158,7 @@ def main():
 
             elif estado_actual == Estado.ENTREGA_FINAL:
                 print(f"\n[ESTADO: {estado_actual}] - Soltando pastilla.")
-                brazo.mover_tiempo([(15, 80)]) # Abrir pinza (Pin 15)
+                brazo.mover_tiempo([(12, 80)]) # Abrir pinza (Pin 12)
                 time.sleep(1)
                 estado_actual = Estado.REGRESO_A_HOME
                 print("[INFO] Ciclo completado.")

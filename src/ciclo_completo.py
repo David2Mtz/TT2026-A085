@@ -73,8 +73,8 @@ def main():
             cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), 
                         cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
             
-            s1, s3, s7 = brazo.estado_actual[1], brazo.estado_actual[3], brazo.estado_actual[7]
-            cv2.putText(frame_vis, f"S1:{s1} | S3:{s3} | S7:{s7}", (10, 60), 
+            s1, s6, s15 = brazo.estado_actual[1], brazo.estado_actual[6], brazo.estado_actual[15]
+            cv2.putText(frame_vis, f"S1:{s1} | S6:{s6} | S15:{s15}", (10, 60), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             # =================================================
@@ -120,22 +120,22 @@ def main():
                     # 1. Centrado Proporcional (Base y Muñeca)
                     brazo.centrar_proporcional(ex, ey)
                     
-                    # 2. Descenso dinámico COORDINADO (S1 y S3 hacia 0 para BAJAR)
+                    # 2. Descenso dinámico COORDINADO (S1 y S6 hacia 0 para BAJAR)
                     if abs(ex) < 45 and abs(ey) < 45:
                         if z_coord > UMBRAL_RECOLECCION:
                             # Bajamos disminuyendo ángulos de Hombro y Codo
                             next_1 = max(5, brazo.estado_actual[1] - 2)
-                            next_3 = max(5, brazo.estado_actual[3] - 1) 
+                            next_6 = max(5, brazo.estado_actual[6] - 1) 
                             
-                            # S7 debe subir (hacia 180) para compensar que el brazo se inclina hacia adelante
-                            next_7 = min(180, brazo.estado_actual[7] + 2)
+                            # S15 debe subir (hacia 180) para compensar que el brazo se inclina hacia adelante
+                            next_15 = min(180, brazo.estado_actual[15] + 2)
                             
-                            print(f"[DEBUG] Bajando coordinado: S1={next_1}, S3={next_3} | Z={z_coord}mm")
-                            brazo.mover_tiempo([(1, next_1), (3, next_3), (7, next_7)])
+                            print(f"[DEBUG] Bajando coordinado: S1={next_1}, S6={next_6} | Z={z_coord}mm")
+                            brazo.mover_tiempo([(1, next_1), (6, next_6), (15, next_15)])
                         else:
                             # 3. Captura por Proximidad ToF
                             print(f"[ToF] CONTACTO! (Z: {z_coord}mm). Cerrando Pinza.")
-                            brazo.mover_tiempo([(15, 0)]) 
+                            brazo.mover_tiempo([(12, 0)]) 
                             time.sleep(1.2)
                             brazo.mover_a_estado("PRE_RECOLECCION") 
                             estado_actual = Estado.OBSERVACION_MANIQUI
@@ -184,7 +184,7 @@ def main():
             elif estado_actual == Estado.ENTREGA:
                 print("[INFO] Liberando carga.")
                 # Abrir pinza (80 grados abre)
-                brazo.mover_tiempo([(15, 80)])
+                brazo.mover_tiempo([(12, 80)])
 
                 time.sleep(1)
                 
