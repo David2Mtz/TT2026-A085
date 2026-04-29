@@ -29,6 +29,7 @@ class Estado:
     OBSERVACION = "OBSERVACION"
     SEGUIMIENTO_PASTILLA = "SEGUIMIENTO_PASTILLA"
     RECOLECCION = "RECOLECCION"
+    ESPERA_CONFIRMACION_AGARRE = "ESPERA_CONFIRMACION_AGARRE"
     OBSERVACION_MANIQUI = "OBSERVACION_MANIQUI"
     SEGUIMIENTO_BOCA = "SEGUIMIENTO_BOCA"
     ENTREGA = "ENTREGA"
@@ -133,12 +134,9 @@ def main():
                             print(f"[DEBUG] Bajando coordinado: S1={next_1}, S6={next_6} | Z={z_coord}mm")
                             brazo.mover_tiempo([(1, next_1), (6, next_6), (15, next_15)])
                         else:
-                            # 3. Captura por Proximidad ToF
-                            print(f"[ToF] CONTACTO! (Z: {z_coord}mm). Cerrando Pinza.")
-                            brazo.mover_tiempo([(12, 0)]) 
-                            time.sleep(1.2)
-                            brazo.mover_a_estado("PRE_RECOLECCION") 
-                            estado_actual = Estado.OBSERVACION_MANIQUI
+                            # 3. Posicionamiento alcanzado por ToF
+                            print(f"[ToF] POSICION LISTA (Z: {z_coord}mm). Esperando confirmacion para agarrar.")
+                            estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
                             macro_movimiento_hecho = False
                 else:
                     frames_sin_pastilla += 1
@@ -147,6 +145,17 @@ def main():
                         estado_actual = Estado.OBSERVACION
                         macro_movimiento_hecho = False
 
+            elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
+                cv2.putText(frame_vis, "OBJETIVO EN LA MIRA - Presiona 'c' para atrapar", (10, 90), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                if key == ord('c'):
+                    print("[INFO] Confirmacion recibida. Cerrando pinza.")
+                    brazo.mover_tiempo([(12, 0)]) 
+                    time.sleep(1.2)
+                    brazo.mover_a_estado("PRE_RECOLECCION") 
+                    estado_actual = Estado.OBSERVACION_MANIQUI
+                    macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
                 if not macro_movimiento_hecho:
