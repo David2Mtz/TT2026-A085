@@ -48,12 +48,10 @@ def main():
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
     
-    # Offsets del sensor (mm)
-    OFFSET_PINZA_ABIERTA = 60 
-    UMBRAL_RECOLECCION = OFFSET_PINZA_ABIERTA + 5 # 65mm (5mm de margen sobre el suelo)
+    # Configuración de distancias (mm)
+    UMBRAL_RECOLECCION = 95 # Nivel del piso (80mm de offset sensor + 7mm de margen/pastilla)
     
     frames_sin_pastilla = 0
-    fase_busqueda_pastilla = 0
     
     print("Presiona 'n' para iniciar el ciclo, 'q' para salir.")
 
@@ -70,7 +68,7 @@ def main():
 
             # Dibujar distancia (Z) y ángulos de servos coordinados
             z_coord = dist_actual
-            color_z = (0, 255, 0) if z_coord < 80 else (0, 255, 255)
+            color_z = (0, 255, 0) if abs(z_coord - UMBRAL_RECOLECCION) < 5 else (0, 255, 255)
             cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), 
                         cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
             
@@ -118,29 +116,55 @@ def main():
                     ex, ey, area = info
                     frames_sin_pastilla = 0
                     
-                    # 1. Centrado Proporcional (Base y Muñeca)
-                    brazo.centrar_proporcional(ex, ey)
+                    # --- LÓGICA DE MOVIMIENTO SIMULTÁNEO (X, Y, Z) ---
+                    # Usamos un diccionario para evitar duplicar comandos de un mismo pin
+                    targets = {} 
+                    tolerancia_vision = 12
                     
-                    # 2. Descenso dinámico COORDINADO (S1 y S6 hacia 0 para BAJAR)
-                    if abs(ex) < 45 and abs(ey) < 45:
-                        if z_coord > UMBRAL_RECOLECCION:
-                            # Bajamos disminuyendo ángulos de Hombro y Codo
-                            next_1 = max(5, brazo.estado_actual[1] - 2)
-                            next_6 = max(5, brazo.estado_actual[6] - 1) 
-                            
-                            # S15 debe subir (hacia 180) para compensar que el brazo se inclina hacia adelante
-                            next_15 = min(180, brazo.estado_actual[15] + 2)
-                            
-                            print(f"[DEBUG] Bajando coordinado: S1={next_1}, S6={next_6} | Z={z_coord}mm")
-                            brazo.mover_tiempo([(1, next_1), (6, next_6), (15, next_15)])
-                        else:
-                            # 3. Posicionamiento alcanzado por ToF
-                            print(f"[ToF] POSICION LISTA (Z: {z_coord}mm). Esperando confirmacion para agarrar.")
-                            estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
-                            macro_movimiento_hecho = False
+                    # 1. Ajuste Horizontal (Base - S0)
+                    if abs(ex) > tolerancia_vision:
+                        paso_x = 1 if ex > 0 else -1
+                        targets[0] = brazo.estado_actual[0] + paso_x
+                    
+                    # 2. Ajuste de Profundidad inicial (Muñeca - S15)
+                    # El error en Y de la cámara se corrige con el Pitch (S15)
+                    angulo_15 = brazo.estado_actual[15]
+                    if abs(ey) > tolerancia_vision:
+                        paso_y = 1 if ey > 0 else -1
+                        angulo_15 += paso_y
+
+                    # 3. Descenso Dinámico (Hombro/Codo - S1/S6)
+                    if z_coord > UMBRAL_RECOLECCION:
+                        # Si está centrado, bajamos un poco más rápido
+                        vel_descenso = 2 if (abs(ex) < 30 and abs(ey) < 30) else 1
+                        
+                        targets[1] = max(5, brazo.estado_actual[1] - vel_descenso)
+                        targets[6] = max(5, brazo.estado_actual[6] - 1) 
+                        
+                        # Compensación de inclinación: al bajar S1, S15 debe subir para compensar
+                        # la rotación del brazo y mantener el sensor mirando al piso.
+                        if abs(ey) < 20:
+                            angulo_15 = min(180, angulo_15 + 1)
+                    
+                    # Guardamos el valor final de S15 (combinando visión + compensación)
+                    if angulo_15 != brazo.estado_actual[15]:
+                        targets[15] = angulo_15
+
+                    # 4. Condición de Parada: Nivel del piso + Centrado aceptable
+                    if z_coord <= UMBRAL_RECOLECCION and abs(ex) < 20 and abs(ey) < 20:
+                        print(f"[ToF] NIVEL DEL SUELO ALCANZADO ({z_coord}mm).")
+                        estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
+                        macro_movimiento_hecho = False
+                    
+                    # Enviar todos los ajustes únicos detectados en este frame
+                    if targets:
+                        # Convertimos el diccionario a la lista de tuplas que espera mover_tiempo
+                        lista_cmds = [(p, a) for p, a in targets.items()]
+                        brazo.mover_tiempo(lista_cmds, esperar=False)
+
                 else:
                     frames_sin_pastilla += 1
-                    if frames_sin_pastilla >= 15:
+                    if frames_sin_pastilla >= 20:
                         print("[INFO] Pastilla perdida, regresando a observación.")
                         estado_actual = Estado.OBSERVACION
                         macro_movimiento_hecho = False

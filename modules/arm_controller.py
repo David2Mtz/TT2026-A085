@@ -20,6 +20,10 @@ class ArmController:
         self.lock = threading.Lock()
         self.event_ok = threading.Event() # Evento para esperar el 'OK'
         
+        # Filtro para el sensor ToF
+        self.lecturas_distancia = []
+        self.max_lecturas = 5 # Promedio de 5 muestras para eliminar ruido
+        
         self.conectar()
         
         self.lector_thread = threading.Thread(target=self._leer_serial, daemon=True)
@@ -76,7 +80,15 @@ class ArmController:
                                 self.event_ok.set()
                             elif linea.startswith("DIST:"):
                                 try:
-                                    self.distancia = int(linea.split(":")[1])
+                                    nueva_dist = int(linea.split(":")[1])
+                                    # Filtro básico: Ignorar lecturas fuera de rango lógico (0-1200mm)
+                                    if 0 < nueva_dist < 1200:
+                                        with self.lock:
+                                            self.lecturas_distancia.append(nueva_dist)
+                                            if len(self.lecturas_distancia) > self.max_lecturas:
+                                                self.lecturas_distancia.pop(0)
+                                            # Mantener self.distancia como el promedio actual
+                                            self.distancia = sum(self.lecturas_distancia) // len(self.lecturas_distancia)
                                 except: pass
                         buffer = lineas[-1]
                 time.sleep(0.005)
