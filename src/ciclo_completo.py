@@ -52,8 +52,8 @@ def main():
     pos_objetivo_anterior = None
     
     # Configuración de distancias (mm)
-    Z_MAX_RECOLECCION = 95 
-    Z_MIN_RECOLECCION = 80 # Rango ampliado 85-95mm
+    Z_MAX_RECOLECCION = 93 
+    Z_MIN_RECOLECCION = 82 # Rango ampliado 85-95mm
 
     frames_sin_pastilla = 0
     
@@ -128,15 +128,32 @@ def main():
                     tolerancia_vision = 12
                     
                     # 1. Ajuste Horizontal (Base - S0)
-                    if abs(ex) > tolerancia_vision:
-                        paso_x = 1 if ex > 0 else -1
-                        targets[0] = brazo.estado_actual[0] + paso_x
+                    if 95 <= z_coord <= 120:
+                        # Fase Final: Aplicar desfase de +10px a la derecha (ex + 10)
+                        error_x_ajustado = ex + 20
+                        if abs(error_x_ajustado) > tolerancia_vision:
+                            paso_x = 1 if error_x_ajustado > 0 else -1
+                            targets[0] = brazo.estado_actual[0] + paso_x
+                    else:
+                        # Ajuste Horizontal normal
+                        if abs(ex) > tolerancia_vision:
+                            paso_x = 1 if ex > 0 else -1
+                            targets[0] = brazo.estado_actual[0] + paso_x
                     
-                    # 2. Ajuste de Profundidad inicial (Muñeca - S15)
+                    # 2. SEGUNDO OFFSET Y AJUSTE ÚNICO PIN 15 (Fase Final: 110mm - 90mm)
                     angulo_15 = brazo.estado_actual[15]
-                    if abs(ey) > tolerancia_vision:
-                        paso_y = 1 if ey > 0 else -1
-                        angulo_15 += paso_y
+                    
+                    if 95 <= z_coord <= 120:
+                        # Aplicar desfase de 50px hacia abajo (ey + 50)
+                        error_y_ajustado = ey + 40
+                        if abs(error_y_ajustado) > tolerancia_vision:
+                            paso_y = 1 if error_y_ajustado > 0 else -1
+                            angulo_15 += paso_y
+                    else:
+                        # Ajuste de Profundidad normal (Muñeca - S15)
+                        if abs(ey) > tolerancia_vision:
+                            paso_y = 1 if ey > 0 else -1
+                            angulo_15 += paso_y
 
                     # 3. Descenso Dinámico (Hombro/Codo - S1/S6)
                     if z_coord > Z_MAX_RECOLECCION:
@@ -153,9 +170,9 @@ def main():
                     if angulo_15 != brazo.estado_actual[15]:
                         targets[15] = angulo_15
 
-                    # 4. Condición de Parada: Rango 85-95mm + Centrado aceptable
-                    if (Z_MIN_RECOLECCION <= z_coord <= Z_MAX_RECOLECCION) and abs(ex) < 25 and abs(ey) < 25:
-                        print(f"[ToF] ZONA DE RECOLECCION ALCANZADA ({z_coord}mm).")
+                    # 4. Condición de Parada: Rango 85-95mm (FORZADO)
+                    if (Z_MIN_RECOLECCION <= z_coord <= Z_MAX_RECOLECCION):
+                        print(f"[ToF] ZONA DE RECOLECCION ALCANZADA ({z_coord}mm). DETENCIÓN FORZADA.")
                         estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
                         macro_movimiento_hecho = False
                     
@@ -224,7 +241,7 @@ def main():
 
             elif estado_actual == Estado.ENTREGA:
                 print("[INFO] Liberando carga.")
-                # Abrir pinza (80 grados abre)
+                # Abrir pinza (90 grados abre)
                 brazo.mover_tiempo([(12, 90)])
 
                 time.sleep(1)
