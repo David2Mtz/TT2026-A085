@@ -65,6 +65,12 @@ def main():
             if frame is None: continue
 
             frame_vis = frame.copy()
+            
+            # --- ROTACIÓN DINÁMICA DE IMAGEN ---
+            # Si el brazo está rotado para la entrega, invertimos la imagen
+            if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ENTREGA]:
+                frame_vis = cv2.rotate(frame_vis, cv2.ROTATE_180)
+
             dist_actual = brazo.obtener_distancia() # Nueva lectura del ToF
             
             key = cv2.waitKey(1) & 0xFF

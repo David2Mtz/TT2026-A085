@@ -39,6 +39,7 @@ POSICIONES = {
         (6, 120), 
         (15, 90),    # Muñeca (Pitch) (ANTES PIN 4)
         (1, 140), # Posición hacia la cara del usuario
+        (13, 180), # ROTACIÓN 180 PARA MIRAR AL FRENTE
         (12, 10)     # Pinza (Cerrada)
     ]
     }
