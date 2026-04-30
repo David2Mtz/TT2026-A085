@@ -12,7 +12,7 @@ class ArmController:
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial sincronizado con el firmware
-        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 13: 0, 12: 80}
+        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 13: 0, 12: 90}
         self.distancia = 999
         self.intentos_y = 0
         self.esp32 = None

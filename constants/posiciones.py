@@ -10,7 +10,7 @@ POSICIONES = {
         (6, 140), # Codo
         (15, 90),  # Muñeca (Pitch) 0 HACIA ARRIBA, 180 HACIA ABAJO ANTES PIN 4
         (13, 90),  # Rotador (Roll) 0 A 180. ANTES PIN 5
-        (12, 80)    # Pinza (Abierta) 0 grados cierra, 80 grados abre, ANTES PIN 6
+        (12, 90)    # Pinza (Abierta) 0 grados cierra, 80 grados abre, ANTES PIN 6
     ],
     
     # Se llama en el estado: OBSERVAR_COLORES
@@ -21,7 +21,7 @@ POSICIONES = {
         (1, 70),  # Hombro inclinado sobre la mesa
         (15, 170), # Muñeca (Pitch) apuntando hacia abajo (ANTES PIN 4)
         (13, 0),  # Rotador (Roll) nivelado (ANTES PIN 5)
-        (12, 40)   # Pinza semi-abierta (ANTES PIN 6)
+        (12, 50)   # Pinza semi-abierta (ANTES PIN 6)
     ],
     
     # Se llama en el estado: RECOLECCION
@@ -39,6 +39,6 @@ POSICIONES = {
         (6, 120), 
         (15, 90),    # Muñeca (Pitch) (ANTES PIN 4)
         (1, 140), # Posición hacia la cara del usuario
-        (12, 0)     # Pinza (Cerrada) (ANTES PIN 6)
+        (12, 10)     # Pinza (Cerrada) (ANTES PIN 6)
     ]
 }

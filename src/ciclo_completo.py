@@ -48,9 +48,13 @@ def main():
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
     
-    # Configuración de distancias (mm)
-    UMBRAL_RECOLECCION = 95 # Nivel del piso (80mm de offset sensor + 7mm de margen/pastilla)
+    # Memoria para persistencia de objetivo (Lock-On)
+    pos_objetivo_anterior = None
     
+    # Configuración de distancias (mm)
+    Z_MAX_RECOLECCION = 95 
+    Z_MIN_RECOLECCION = 80 # Rango ampliado 85-95mm
+
     frames_sin_pastilla = 0
     
     print("Presiona 'n' para iniciar el ciclo, 'q' para salir.")
@@ -68,7 +72,7 @@ def main():
 
             # Dibujar distancia (Z) y ángulos de servos coordinados
             z_coord = dist_actual
-            color_z = (0, 255, 0) if abs(z_coord - UMBRAL_RECOLECCION) < 5 else (0, 255, 255)
+            color_z = (0, 255, 0) if (Z_MIN_RECOLECCION <= z_coord <= Z_MAX_RECOLECCION) else (0, 255, 255)
             cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), 
                         cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
             
@@ -81,6 +85,7 @@ def main():
             # =================================================
 
             if estado_actual == Estado.HOME:
+                pos_objetivo_anterior = None # Resetear memoria
                 if not macro_movimiento_hecho:
                     print("[MOVIMIENTO] Sincronizando posición HOME...")
                     brazo.mover_a_estado("HOME", forzar=True)
@@ -110,14 +115,15 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
             elif estado_actual == Estado.RECOLECCION:
-                frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
+                # Quitamos pos_anterior de aquí para que el detector use el centro de la pinza
+                frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower(), 
+                                                       dist_actual=dist_actual)
                 
                 if info:
                     ex, ey, area = info
                     frames_sin_pastilla = 0
                     
                     # --- LÓGICA DE MOVIMIENTO SIMULTÁNEO (X, Y, Z) ---
-                    # Usamos un diccionario para evitar duplicar comandos de un mismo pin
                     targets = {} 
                     tolerancia_vision = 12
                     
@@ -127,38 +133,40 @@ def main():
                         targets[0] = brazo.estado_actual[0] + paso_x
                     
                     # 2. Ajuste de Profundidad inicial (Muñeca - S15)
-                    # El error en Y de la cámara se corrige con el Pitch (S15)
                     angulo_15 = brazo.estado_actual[15]
                     if abs(ey) > tolerancia_vision:
                         paso_y = 1 if ey > 0 else -1
                         angulo_15 += paso_y
 
                     # 3. Descenso Dinámico (Hombro/Codo - S1/S6)
-                    if z_coord > UMBRAL_RECOLECCION:
+                    if z_coord > Z_MAX_RECOLECCION:
                         # Si está centrado, bajamos un poco más rápido
                         vel_descenso = 2 if (abs(ex) < 30 and abs(ey) < 30) else 1
                         
                         targets[1] = max(5, brazo.estado_actual[1] - vel_descenso)
                         targets[6] = max(5, brazo.estado_actual[6] - 1) 
                         
-                        # Compensación de inclinación: al bajar S1, S15 debe subir para compensar
-                        # la rotación del brazo y mantener el sensor mirando al piso.
+                        # Compensación de inclinación
                         if abs(ey) < 20:
                             angulo_15 = min(180, angulo_15 + 1)
                     
-                    # Guardamos el valor final de S15 (combinando visión + compensación)
                     if angulo_15 != brazo.estado_actual[15]:
                         targets[15] = angulo_15
 
-                    # 4. Condición de Parada: Nivel del piso + Centrado aceptable
-                    if z_coord <= UMBRAL_RECOLECCION and abs(ex) < 20 and abs(ey) < 20:
-                        print(f"[ToF] NIVEL DEL SUELO ALCANZADO ({z_coord}mm).")
+                    # 4. Condición de Parada: Rango 85-95mm + Centrado aceptable
+                    if (Z_MIN_RECOLECCION <= z_coord <= Z_MAX_RECOLECCION) and abs(ex) < 25 and abs(ey) < 25:
+                        print(f"[ToF] ZONA DE RECOLECCION ALCANZADA ({z_coord}mm).")
                         estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
                         macro_movimiento_hecho = False
                     
-                    # Enviar todos los ajustes únicos detectados en este frame
+                    # Si el sensor baja de 85mm por inercia, también nos detenemos
+                    elif z_coord < Z_MIN_RECOLECCION:
+                        print(f"[ALERTA] Límite de seguridad alcanzado ({z_coord}mm).")
+                        estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
+                        macro_movimiento_hecho = False
+                    
+                    # Enviar comandos
                     if targets:
-                        # Convertimos el diccionario a la lista de tuplas que espera mover_tiempo
                         lista_cmds = [(p, a) for p, a in targets.items()]
                         brazo.mover_tiempo(lista_cmds, esperar=False)
 
@@ -175,7 +183,7 @@ def main():
                 
                 if key == ord('c'):
                     print("[INFO] Confirmacion recibida. Cerrando pinza.")
-                    brazo.mover_tiempo([(12, 0)]) 
+                    brazo.mover_tiempo([(12, 10)]) 
                     time.sleep(1.2)
                     brazo.mover_a_estado("PRE_RECOLECCION") 
                     estado_actual = Estado.OBSERVACION_MANIQUI
@@ -217,7 +225,7 @@ def main():
             elif estado_actual == Estado.ENTREGA:
                 print("[INFO] Liberando carga.")
                 # Abrir pinza (80 grados abre)
-                brazo.mover_tiempo([(12, 80)])
+                brazo.mover_tiempo([(12, 90)])
 
                 time.sleep(1)
                 
