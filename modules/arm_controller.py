@@ -143,7 +143,7 @@ class ArmController:
     def centrar_proporcional(self, error_x, error_y):
         """Ajuste inteligente basado en un controlador Proporcional."""
         tolerancia = 10
-        kp_x = 0.02  
+        kp_x = -0.01 
         kp_y = 0.02  
         max_paso = 3 
         
@@ -190,11 +190,11 @@ class ArmController:
         """Retorna la última distancia leída por el sensor ToF."""
         return self.distancia
 
-    def mover_a_estado(self, nombre_estado, forzar=False):
+    def mover_a_estado(self, nombre_estado, forzar=False, esperar=False):
         """Mueve el brazo a una posición predefinida en posiciones.py."""
         if nombre_estado in POSICIONES:
             print(f"[BRAZO] Moviendo a estado: {nombre_estado}")
-            self.mover_tiempo(POSICIONES[nombre_estado], forzar=forzar)
+            self.mover_tiempo(POSICIONES[nombre_estado], forzar=forzar, esperar=esperar)
         else:
             print(f"[BRAZO] Error: Estado '{nombre_estado}' no encontrado en posiciones.py")
 

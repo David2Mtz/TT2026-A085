@@ -24,12 +24,6 @@ PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
 COLOR_OBJETIVO = "Verde" 
 
-# --- AJUSTE FINO (OFFSET) ---
-# Estos valores se suman a la posición actual antes de la confirmación
-OFFSET_X = 0  # Ajuste en Base (Servo 0)
-OFFSET_Y = 0  # Ajuste en Muñeca (Servo 15)
-OFFSET_Z = 0  #servo 1
-
 class Estado:
     HOME = "HOME"
     OBSERVACION = "OBSERVACION"
@@ -58,11 +52,15 @@ def main():
     pos_objetivo_anterior = None
     
     # Configuración de distancias (mm)
-    Z_MAX_RECOLECCION = 95 
-    Z_MIN_RECOLECCION = 80 # Rango ampliado 85-95mm
+    Z_MAX_RECOLECCION = 93 
+    Z_MIN_RECOLECCION = 82 # Rango ampliado 85-95mm
 
     frames_sin_pastilla = 0
     
+    # --- VARIABLES PARA TRACKING DE AJUSTE MANUAL ---
+    ajuste_manual_x = 0
+    ajuste_manual_y = 0
+
     print("Presiona 'n' para iniciar el ciclo, 'q' para salir.")
 
     try:
@@ -142,7 +140,7 @@ def main():
                     # 1. Ajuste Horizontal (Base - S0)
                     if 95 <= z_coord <= 120:
                         # Fase Final: Aplicar desfase de +10px a la derecha (ex + 10)
-                        error_x_ajustado = ex + 0
+                        error_x_ajustado = ex + 20
                         if abs(error_x_ajustado) > tolerancia_vision:
                             paso_x = 1 if error_x_ajustado > 0 else -1
                             targets[0] = brazo.estado_actual[0] + paso_x
@@ -173,7 +171,7 @@ def main():
                         vel_descenso = 2 if (abs(ex) < 30 and abs(ey) < 30) else 1
                         
                         targets[1] = max(5, brazo.estado_actual[1] - vel_descenso)
-                        targets[6] = max(20, brazo.estado_actual[6] - 1) 
+                        targets[6] = max(5, brazo.estado_actual[6] - 1) 
                         
                         # Compensación de inclinación
                         if abs(ey) < 20:
@@ -185,31 +183,12 @@ def main():
                     # 4. Condición de Parada: Rango 85-95mm (FORZADO)
                     if (Z_MIN_RECOLECCION <= z_coord <= Z_MAX_RECOLECCION):
                         print(f"[ToF] ZONA DE RECOLECCION ALCANZADA ({z_coord}mm). DETENCIÓN FORZADA.")
-                        
-                        # --- APLICAR AJUSTE FINO (OFFSET) ---
-                        if OFFSET_X != 0 or OFFSET_Y != 0:
-                            print(f"[INFO] Aplicando offset de recolección: X={OFFSET_X}, Y={OFFSET_Y}")
-                            brazo.mover_tiempo([
-                                (0, brazo.estado_actual[0] + OFFSET_X),
-                                (15, brazo.estado_actual[15] + OFFSET_Y),
-                                (1, brazo.estado_actual[1] + OFFSET_Z )
-                            ])
-
                         estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
                         macro_movimiento_hecho = False
                     
                     # Si el sensor baja de 85mm por inercia, también nos detenemos
                     elif z_coord < Z_MIN_RECOLECCION:
                         print(f"[ALERTA] Límite de seguridad alcanzado ({z_coord}mm).")
-
-                        # --- APLICAR AJUSTE FINO (OFFSET) ---
-                        if OFFSET_X != 0 or OFFSET_Y != 0:
-                            brazo.mover_tiempo([
-                                (0, brazo.estado_actual[0] + OFFSET_X),
-                                (15, brazo.estado_actual[15] + OFFSET_Y),
-                                (1, brazo.estado_actual[1] + OFFSET_Z )
-                            ])
-
                         estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
                         macro_movimiento_hecho = False
                     
@@ -226,16 +205,38 @@ def main():
                         macro_movimiento_hecho = False
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
-                cv2.putText(frame_vis, "OBJETIVO EN LA MIRA - Presiona 'c' para atrapar", (10, 90), 
+                cv2.putText(frame_vis, "MANUAL: WASD | 'c' para confirmar", (10, 90), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
+                # Mostrar el ajuste acumulado en pantalla
+                cv2.putText(frame_vis, f"OFFSET ACUMULADO: X={ajuste_manual_x}, Y={ajuste_manual_y}", (10, 120), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 0), 2)
+                
+                # --- CONTROL MANUAL DE AJUSTE FINO ---
+                if key == ord('w'):
+                    brazo.mover_tiempo([(6, brazo.estado_actual[6] + 1)], esperar=False)
+                    ajuste_manual_y += 1
+                elif key == ord('s'):
+                    brazo.mover_tiempo([(15, brazo.estado_actual[15] - 1)], esperar=False)
+                    ajuste_manual_y -= 1
+                elif key == ord('a'):
+                    brazo.mover_tiempo([(0, brazo.estado_actual[0] - 1)], esperar=False)
+                    ajuste_manual_x -= 1
+                elif key == ord('d'):
+                    brazo.mover_tiempo([(0, brazo.estado_actual[0] + 1)], esperar=False)
+                    ajuste_manual_x += 1
+
                 if key == ord('c'):
+                    print(f"\n[RESULTADO AJUSTE] Offset final aplicado: OFFSET_X = {ajuste_manual_x}, OFFSET_Y = {ajuste_manual_y}")
                     print("[INFO] Confirmacion recibida. Cerrando pinza.")
                     brazo.mover_tiempo([(12, 10)]) 
                     time.sleep(1.2)
                     brazo.mover_a_estado("PRE_RECOLECCION") 
                     estado_actual = Estado.OBSERVACION_MANIQUI
                     macro_movimiento_hecho = False
+                    # Resetear para el siguiente ciclo si fuera necesario
+                    ajuste_manual_x = 0
+                    ajuste_manual_y = 0
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
                 if not macro_movimiento_hecho:
