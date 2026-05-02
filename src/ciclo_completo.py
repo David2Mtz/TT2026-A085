@@ -22,7 +22,7 @@ load_dotenv()
 # ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Verde" 
+COLOR_OBJETIVO = "Azul" 
 
 # --- AJUSTE FINO (OFFSET) ---
 # Estos valores se suman a la posición actual antes de la confirmación
@@ -58,8 +58,8 @@ def main():
     pos_objetivo_anterior = None
     
     # Configuración de distancias (mm)
-    Z_MAX_RECOLECCION = 95 
-    Z_MIN_RECOLECCION = 80 # Rango ampliado 85-95mm
+    Z_MAX_RECOLECCION = 80 
+    Z_MIN_RECOLECCION = 73 # Rango ampliado 85-95mm
 
     frames_sin_pastilla = 0
     
@@ -132,7 +132,12 @@ def main():
                                                        dist_actual=dist_actual)
                 
                 if info:
-                    ex, ey, area = info
+                    # Desempaquetar nuevos valores (incluye validación de visor)
+                    # ex, ey, area, esta_en_visor, dist_visor (si dist_actual < 125)
+                    ex, ey = info[0], info[1]
+                    area = info[2]
+                    esta_en_visor = info[3] if len(info) > 3 else False
+                    
                     frames_sin_pastilla = 0
                     
                     # --- LÓGICA DE MOVIMIENTO SIMULTÁNEO (X, Y, Z) ---
@@ -140,78 +145,55 @@ def main():
                     tolerancia_vision = 12
                     
                     # 1. Ajuste Horizontal (Base - S0)
-                    if 95 <= z_coord <= 120:
-                        # Fase Final: Aplicar desfase de +10px a la derecha (ex + 10)
-                        error_x_ajustado = ex + 0
-                        if abs(error_x_ajustado) > tolerancia_vision:
-                            paso_x = 1 if error_x_ajustado > 0 else -1
-                            targets[0] = brazo.estado_actual[0] + paso_x
-                    else:
-                        # Ajuste Horizontal normal
-                        if abs(ex) > tolerancia_vision:
-                            paso_x = 1 if ex > 0 else -1
-                            targets[0] = brazo.estado_actual[0] + paso_x
+                    if abs(ex) > tolerancia_vision:
+                        paso_x = 1 if ex > 0 else -1
+                        targets[0] = brazo.estado_actual[0] + paso_x
                     
-                    # 2. SEGUNDO OFFSET Y AJUSTE ÚNICO PIN 15 (Fase Final: 110mm - 90mm)
+                    # 2. Ajuste de Profundidad (Especial: Pin 6 para Abajo, Pin 15 para Arriba)
                     angulo_15 = brazo.estado_actual[15]
-                    
-                    if 95 <= z_coord <= 120:
-                        # Aplicar desfase de 50px hacia abajo (ey + 50)
-                        error_y_ajustado = ey + 40
-                        if abs(error_y_ajustado) > tolerancia_vision:
-                            paso_y = 1 if error_y_ajustado > 0 else -1
-                            angulo_15 += paso_y
-                    else:
-                        # Ajuste de Profundidad normal (Muñeca - S15)
-                        if abs(ey) > tolerancia_vision:
-                            paso_y = 1 if ey > 0 else -1
+                    angulo_6 = brazo.estado_actual[6]
+
+                    if abs(ey) > tolerancia_vision:
+                        if ey > 0: # Abajo
+                            paso_y = 1
+                            angulo_6 += paso_y
+                        else: # Arriba
+                            paso_y = -1
                             angulo_15 += paso_y
 
                     # 3. Descenso Dinámico (Hombro/Codo - S1/S6)
                     if z_coord > Z_MAX_RECOLECCION:
-                        # Si está centrado, bajamos un poco más rápido
                         vel_descenso = 2 if (abs(ex) < 30 and abs(ey) < 30) else 1
-                        
                         targets[1] = max(5, brazo.estado_actual[1] - vel_descenso)
-                        targets[6] = max(20, brazo.estado_actual[6] - 1) 
-                        
-                        # Compensación de inclinación
+                        angulo_6 = max(20, angulo_6 - 1)
                         if abs(ey) < 20:
                             angulo_15 = min(180, angulo_15 + 1)
                     
                     if angulo_15 != brazo.estado_actual[15]:
                         targets[15] = angulo_15
+                    if angulo_6 != brazo.estado_actual[6]:
+                        targets[6] = angulo_6
 
-                    # 4. Condición de Parada: Rango 85-95mm (FORZADO)
-                    if (Z_MIN_RECOLECCION <= z_coord <= Z_MAX_RECOLECCION):
-                        print(f"[ToF] ZONA DE RECOLECCION ALCANZADA ({z_coord}mm). DETENCIÓN FORZADA.")
-                        
-                        # --- APLICAR AJUSTE FINO (OFFSET) ---
-                        if OFFSET_X != 0 or OFFSET_Y != 0:
-                            print(f"[INFO] Aplicando offset de recolección: X={OFFSET_X}, Y={OFFSET_Y}")
-                            brazo.mover_tiempo([
-                                (0, brazo.estado_actual[0] + OFFSET_X),
-                                (15, brazo.estado_actual[15] + OFFSET_Y),
-                                (1, brazo.estado_actual[1] + OFFSET_Z )
-                            ])
+                    # 4. Condición de Parada y VALIDACIÓN DE VISOR
+                    if (z_coord <= Z_MAX_RECOLECCION):
+                        # Solo pasamos a confirmación si la pastilla ESTÁ en el visor
+                        if esta_en_visor or dist_actual > 125: # Si no estamos en modo fino, basta con estar en rango Z
+                            print(f"[ToF] ZONA DE RECOLECCION ALCANZADA ({z_coord}mm) Y VALIDADA.")
+                            
+                            if OFFSET_X != 0 or OFFSET_Y != 0:
+                                brazo.mover_tiempo([
+                                    (0, brazo.estado_actual[0] + OFFSET_X),
+                                    (15, brazo.estado_actual[15] + OFFSET_Y),
+                                    (1, brazo.estado_actual[1] + OFFSET_Z )
+                                ])
 
-                        estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
-                        macro_movimiento_hecho = False
-                    
-                    # Si el sensor baja de 85mm por inercia, también nos detenemos
-                    elif z_coord < Z_MIN_RECOLECCION:
-                        print(f"[ALERTA] Límite de seguridad alcanzado ({z_coord}mm).")
-
-                        # --- APLICAR AJUSTE FINO (OFFSET) ---
-                        if OFFSET_X != 0 or OFFSET_Y != 0:
-                            brazo.mover_tiempo([
-                                (0, brazo.estado_actual[0] + OFFSET_X),
-                                (15, brazo.estado_actual[15] + OFFSET_Y),
-                                (1, brazo.estado_actual[1] + OFFSET_Z )
-                            ])
-
-                        estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
-                        macro_movimiento_hecho = False
+                            estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
+                            macro_movimiento_hecho = False
+                        else:
+                            # LOCAL RE-SCAN: Estamos a la altura correcta pero la pastilla NO está en el visor
+                            cv2.putText(frame_vis, "ALINEANDO CON VISOR (RE-SCAN)...", (10, 160), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                            # Seguimos en este estado para que el bucle de arriba siga ajustando ex, ey
                     
                     # Enviar comandos
                     if targets:
@@ -220,10 +202,15 @@ def main():
 
                 else:
                     frames_sin_pastilla += 1
-                    if frames_sin_pastilla >= 20:
-                        print("[INFO] Pastilla perdida, regresando a observación.")
-                        estado_actual = Estado.OBSERVACION
-                        macro_movimiento_hecho = False
+                    if frames_sin_pastilla >= 30: # Tolerancia aumentada
+                        if z_coord < 150:
+                            # Si estamos cerca, no regresamos a observación, intentamos re-ubicar localmente
+                            cv2.putText(frame_vis, "OBJETIVO PERDIDO - RE-ESCANEANDO LOCALMENTE", (10, 130), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        else:
+                            print("[INFO] Pastilla perdida, regresando a observación.")
+                            estado_actual = Estado.OBSERVACION
+                            macro_movimiento_hecho = False
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
                 cv2.putText(frame_vis, "OBJETIVO EN LA MIRA - Presiona 'c' para atrapar", (10, 90), 

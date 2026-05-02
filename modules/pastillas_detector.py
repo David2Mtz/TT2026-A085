@@ -63,57 +63,84 @@ def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSE
     cv2.circle(frame, (cx_pantalla, cy_pantalla), 8, (255, 0, 0), -1)
 
     # --- DECIDIR MODO DE SEGMENTACIÓN ---
-    # Si estamos a menos de 130mm, usamos el 'Modo Lupa'
-    if dist_actual < 100:
-        # Siempre buscamos alrededor de la pinza (donde queremos llevar la pastilla)
-        roi_size = 200 # ROI más grande para no perderla
-        x1 = max(0, cx_pantalla - roi_size // 2)
-        y1 = max(0, cy_pantalla - roi_size // 2)
-        x2 = min(ancho, cx_pantalla + roi_size // 2)
-        y2 = min(alto, cy_pantalla + roi_size // 2)
+    # Si estamos a menos de 125mm (antes 115), usamos el 'Seguimiento Cercano'
+    if dist_actual < 125:
+        # EL OBJETIVO VISUAL: Donde queremos que la pastilla aparezca en la imagen
+        # La cámara se queda fija en su posición relativa al brazo, pero el control
+        # moverá el brazo hasta que la pastilla coincida con este "Visor".
+        target_x = cx_pantalla + 30    # En X suele ser el centro
+        target_y = cy_pantalla - 50   # En Y la queremos arriba (donde está la pinza)
         
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
-        cv2.putText(frame, "MODO LUPA (PINZA)", (x1, y1 - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        # ROI de búsqueda alrededor del target visual
+        roi_size = 180
+        x1 = max(0, target_x - roi_size // 2)
+        y1 = max(0, target_y - roi_size // 2)
+        x2 = min(ancho, target_x + roi_size // 2)
+        y2 = min(alto, target_y + roi_size // 2)
         
-        # Segmentación solo en el ROI
-        hsv_roi = hsv_frame[y1:y2, x1:x2]
-        ranges = get_hsv_ranges(color_base)
-        mask_base = cv2.inRange(hsv_roi, ranges[0][0], ranges[0][1])
-        if len(ranges) > 1:
-            mask_base = cv2.add(mask_base, cv2.inRange(hsv_roi, ranges[1][0], ranges[1][1]))
-        
-        # La pastilla es "lo que no es base"
-        mask_pastilla = cv2.bitwise_not(mask_base)
-        kernel = np.ones((5, 5), np.uint8)
-        mask_pastilla = cv2.morphologyEx(mask_pastilla, cv2.MORPH_OPEN, kernel)
-        
-        contours, _ = cv2.findContours(mask_pastilla, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        pills = []
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            # Aumentamos área máxima a 25000 porque de cerca se ve muy grande
-            if 150 < area < 25000:
-                M = cv2.moments(cnt)
-                if M["m00"] != 0:
-                    cx = int(M["m10"] / M["m00"]) + x1
-                    cy = int(M["m01"] / M["m00"]) + y1
-                    dist_al_centro = np.sqrt((cx - cx_pantalla)**2 + (cy - cy_pantalla)**2)
-                    pills.append((cnt, cx, cy, area, dist_al_centro))
-        
-        if pills:
-            # Seleccionamos la que esté más cerca del centro físico de la pinza
-            best = min(pills, key=lambda x: x[4])
-            error_tracking = (best[1] - cx_pantalla, best[2] - cy_pantalla, best[3])
+        # Segmentación por escala de grises (más robusta cuando se pierde el color de base)
+        roi = frame[y1:y2, x1:x2]
+        if roi.size > 0:
+            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            gray_roi = cv2.GaussianBlur(gray_roi, (5, 5), 0)
+            # Otsu para segmentación automática
+            _, mask_pastilla = cv2.threshold(gray_roi, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
             
-            # Dibujar seguimiento
-            (x_c, y_c, w_c, h_c) = cv2.boundingRect(best[0])
-            cv2.rectangle(frame, (x_c + x1, y_c + y1), (x_c + x1 + w_c, y_c + y1 + h_c), (0, 255, 0), 2)
-            cv2.circle(frame, (best[1], best[2]), 5, (0, 0, 255), -1)
+            # Invertir si el objeto (pastilla) es más oscuro que el fondo (o viceversa)
+            if cv2.countNonZero(mask_pastilla) > (roi.shape[0] * roi.shape[1] / 2):
+                mask_pastilla = cv2.bitwise_not(mask_pastilla)
+            
+            kernel = np.ones((3,3), np.uint8)
+            mask_pastilla = cv2.morphologyEx(mask_pastilla, cv2.MORPH_OPEN, kernel)
+            
+            contours, _ = cv2.findContours(mask_pastilla, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            pills = []
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if 150 < area < 20000:
+                    M = cv2.moments(cnt)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"]) + x1
+                        cy = int(M["m01"] / M["m00"]) + y1
+                        dist_al_target = np.sqrt((cx - target_x)**2 + (cy - target_y)**2)
+                        pills.append((cnt, cx, cy, area, dist_al_target))
+            
+            if pills:
+                # Seleccionamos la más cercana al target visual (el visor)
+                best = min(pills, key=lambda x: x[4])
+                dist_al_target = best[4]
+                
+                # El error es la distancia de la pastilla al VISOR
+                # Guardamos si está "dentro" del visor (ej: gap de 35px)
+                esta_en_visor = dist_al_target < 35 
+                error_tracking = (best[1] - target_x, best[2] - target_y, best[3], esta_en_visor, dist_al_target)
+                
+                # Dibujar seguimiento
+                cv2.drawContours(frame, [best[0] + [x1, y1]], -1, (0, 255, 0), 2)
+                cv2.circle(frame, (best[1], best[2]), 5, (0, 0, 255), -1)
+
+        # --- DIBUJAR VISOR DE 4 LÍNEAS (Target Independiente) ---
+        # Este visor NO está en el centro, está en (target_x, target_y)
+        gap = 48
+        l_len = 19
+        c_visor = (0, 255, 255) # Amarillo
+        
+        # Esquinas del visor
+        cv2.line(frame, (target_x - gap, target_y - gap), (target_x - gap, target_y - gap + l_len), c_visor, 2)
+        cv2.line(frame, (target_x - gap, target_y + gap), (target_x - gap, target_y + gap - l_len), c_visor, 2)
+        cv2.line(frame, (target_x + gap, target_y - gap), (target_x + gap, target_y - gap + l_len), c_visor, 2)
+        cv2.line(frame, (target_x + gap, target_y + gap), (target_x + gap, target_y + gap - l_len), c_visor, 2)
+        cv2.line(frame, (target_x - gap, target_y - gap), (target_x - gap + l_len, target_y - gap), c_visor, 2)
+        cv2.line(frame, (target_x + gap, target_y - gap), (target_x + gap - l_len, target_y - gap), c_visor, 2)
+        cv2.line(frame, (target_x - gap, target_y + gap), (target_x - gap + l_len, target_y + gap), c_visor, 2)
+        cv2.line(frame, (target_x + gap, target_y + gap), (target_x + gap - l_len, target_y + gap), c_visor, 2)
+
+        cv2.putText(frame, "AREA DE AGARRE", (target_x - 50, target_y - gap - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_visor, 1)
 
     else:
-        # --- MODO NORMAL (SIN CAMBIOS) ---
+        # --- MODO NORMAL (CON COLOR DE BASE) ---
         base_contour, base_color_mask = find_base(hsv_frame, color_base)
         if base_contour is not None:
             cv2.drawContours(frame, [base_contour], -1, (0, 255, 0), 2)
@@ -133,6 +160,22 @@ def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSE
                         cx_p, cy_p = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
                         error_tracking = (cx_p - cx_pantalla, cy_p - cy_pantalla, M["m00"])
                         cv2.drawContours(frame, [selected_pill], -1, (0, 0, 255), 2)
+                else:
+                    # FALLBACK: Si detecta base pero no pastilla, seguimos el centro de la base
+                    M = cv2.moments(base_contour)
+                    if M["m00"] != 0:
+                        cx_b, cy_b = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
+                        error_tracking = (cx_b - cx_pantalla, cy_b - cy_pantalla, M["m00"])
+                        cv2.putText(frame, "BUSCANDO PASTILLA EN BASE...", (10, 80), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
+            else:
+                # FALLBACK: Si detecta base pero no pastilla (sin contornos internos)
+                M = cv2.moments(base_contour)
+                if M["m00"] != 0:
+                    cx_b, cy_b = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
+                    error_tracking = (cx_b - cx_pantalla, cy_b - cy_pantalla, M["m00"])
+                    cv2.putText(frame, "BUSCANDO PASTILLA EN BASE...", (10, 80), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 165, 255), 2)
 
     # Dibujar línea de error si hay objetivo
     if error_tracking:
