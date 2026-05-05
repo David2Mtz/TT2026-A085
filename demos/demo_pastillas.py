@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
-from modules.pastillas_detector import process_pastillas_frame
+from modules.pastillas_detector import process_pastillas_frame, iniciar_deteccion, finalizar_deteccion
 
 # Cargar variables de entorno
 load_dotenv()
@@ -44,6 +44,9 @@ def main():
         print("\n[INFO] Iniciando cámara...")
         camara = CameraSerial(port=puerto_camara, baud_rate=460800)
         print("[INFO] Cámara lista.")
+        
+        # Activar LED para la detección de pastillas (48)
+        iniciar_deteccion(camara)
     except Exception as e:
         print(f"[ERROR] No se pudo conectar a la cámara: {e}")
         brazo.cerrar()
@@ -91,6 +94,8 @@ def main():
     finally:
         print("\n[INFO] Cerrando recursos...")
         if 'camara' in locals():
+            # Apagar LED antes de cerrar
+            finalizar_deteccion(camara)
             camara.liberar()
         if 'brazo' in locals():
             brazo.mover_a_estado("HOME")

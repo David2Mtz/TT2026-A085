@@ -34,12 +34,22 @@ POSICIONES = {
 
     # Se llama en el estado: OBSERVACION_MANIQUI
     # Posición inicial apuntando hacia el rostro para que el IBVS busque la boca
+    "OBSERVACION_MANIQUI": [
+        (0, 10),   # Regresar base al frente
+        (6, 120), 
+        (15, 100),    # Muñeca (Pitch) (ANTES PIN 4)
+        (1, 140), # Posición hacia la cara del usuario
+        (13, 180), # ROTACIÓN 180 PARA MIRAR AL FRENTE
+        (12, 10)     # Pinza (Cerrada)
+    ],
+
+    # Se llama en el estado: ENTREGA
     "ENTREGA": [
         (0, 160),   # Regresar base al frente
         (6, 120), 
         (15, 90),    # Muñeca (Pitch) (ANTES PIN 4)
         (1, 140), # Posición hacia la cara del usuario
-        (13, 180), # ROTACIÓN 180 PARA MIRAR AL FRENTE
+        (13, 0), # ROTACIÓN 180 PARA MIRAR AL FRENTE
         (12, 10)     # Pinza (Cerrada)
     ]
     }

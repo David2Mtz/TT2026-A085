@@ -14,6 +14,7 @@ class CameraSerial:
         self.port = port or os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
         self.baud_rate = baud_rate
         self.ser = None
+        self.last_brightness = -1 # Cache para evitar saturar el puerto
         self.conectar()
 
     def conectar(self):
@@ -35,26 +36,28 @@ class CameraSerial:
             return None
 
         for intento in range(max_intentos):
-            self.ser.reset_input_buffer()
+            # No reseteamos el buffer de entrada aquí para no borrar la cabecera si ya llegó
             self.ser.write(b'R')
             self.ser.flush()
 
-            # 1. Esperar la cabecera usando read_until para ignorar basura inicial
+            # 1. Esperar la cabecera usando read_until
             sync = self.ser.read_until(b'IMG:')
             if not sync.endswith(b'IMG:'):
-                print(f"[Intento {intento+1}] Sin sincronización. Recibido: {sync}")
+                # Si falla, entonces sí limpiamos para el siguiente intento
+                self.ser.reset_input_buffer()
                 time.sleep(0.05)
                 continue
+
 
             # 2. Leer el tamaño
             size_bytes = self.ser.read(4)
             if len(size_bytes) != 4:
-                print(f"[Intento {intento+1}] No se pudieron leer los 4 bytes de tamaño.")
+                # print(f"[Intento {intento+1}] No se pudieron leer los 4 bytes de tamaño.")
                 continue
             
             img_size = struct.unpack('<I', size_bytes)[0]
             if img_size == 0 or img_size > 500000: 
-                print(f"[Intento {intento+1}] Tamaño de imagen anómalo: {img_size} bytes.")
+                # print(f"[Intento {intento+1}] Tamaño de imagen anómalo: {img_size} bytes.")
                 continue
 
             # 3. Leer exactamente los bytes requeridos por trozos
@@ -87,9 +90,33 @@ class CameraSerial:
                 
                 return frame 
             else:
-                print(f"[Intento {intento+1}] Error al decodificar la imagen.")
+                # print(f"[Intento {intento+1}] Error al decodificar la imagen.")
+                pass
                 
         return None
+
+    def set_led_brightness(self, level):
+        """
+        Envía un comando para ajustar el brillo del LED Flash.
+        Solo envía el comando si el nivel es distinto al anterior.
+        """
+        if not self.ser or not self.ser.is_open:
+            return
+
+        try:
+            # Asegurar que el nivel esté en el rango correcto
+            level = max(0, min(255, int(level)))
+            
+            # Solo enviar si el nivel cambió (evita saturar el buffer serial)
+            if level == self.last_brightness:
+                return
+
+            # Enviar comando 'L' seguido del byte de brillo
+            self.ser.write(b'L' + struct.pack('B', level))
+            self.ser.flush()
+            self.last_brightness = level
+        except Exception as e:
+            print(f"Error al ajustar el brillo del LED: {e}")
 
     def liberar(self):
         if self.ser and self.ser.is_open:

@@ -3,6 +3,7 @@ import sys
 import os
 import cv2
 import time
+import numpy as np
 from dotenv import load_dotenv
 
 # Corrección de ruta para importar módulos desde la raíz del proyecto
@@ -10,9 +11,13 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
-from modules.pastillas_detector import process_pastillas_frame
+from modules.pastillas_detector import (
+    process_pastillas_frame,
+    iniciar_deteccion as iniciar_deteccion_pastillas,
+    finalizar_deteccion as finalizar_deteccion_pastillas
+)
 from modules.detectarColor import process_color_frame
-from modules.mouth_detector import get_mouth_coordinates
+from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, finalizar_deteccion
 
 # Cargar variables de entorno
 load_dotenv()
@@ -24,11 +29,7 @@ PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
 COLOR_OBJETIVO = "Azul" 
 
-# --- AJUSTE FINO (OFFSET) ---
-# Estos valores se suman a la posición actual antes de la confirmación
-OFFSET_X = 0  # Ajuste en Base (Servo 0)
-OFFSET_Y = 0  # Ajuste en Muñeca (Servo 15)
-OFFSET_Z = 0  #servo 1
+from constants.config import OFFSET_X, OFFSET_Y
 
 class Estado:
     HOME = "HOME"
@@ -41,11 +42,10 @@ class Estado:
     ENTREGA = "ENTREGA"
 
 def main():
-    print("--- INICIANDO CICLO COMPLETO CON SENSOR DE DISTANCIA ToF ---")
+    print("--- INICIANDO CICLO COMPLETO (PASTILLAS) ---")
     
     try:
         camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
-        # Actualizado a 115200 baudios para el nuevo firmware con ToF
         brazo = ArmController(puerto=PUERTO_BRAZO, baudios=115200)
     except Exception as e:
         print(f"[ERROR] No se pudo inicializar el hardware: {e}")
@@ -54,14 +54,12 @@ def main():
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
     
-    # Memoria para persistencia de objetivo (Lock-On)
-    pos_objetivo_anterior = None
-    
-    # Configuración de distancias (mm)
-    Z_MAX_RECOLECCION = 80 
-    Z_MIN_RECOLECCION = 73 # Rango ampliado 85-95mm
-
-    frames_sin_pastilla = 0
+    # --- CONFIGURACIÓN DE RECOLECCIÓN ---
+    Z_UMBRAL_LOCKON = 115    
+    Z_LIMITE_FINAL = 75      
+    TOLERANCIA_CENTRADO = 12 
+    lockon_activado = False  
+    lockon_activado_boca = False
     
     print("Presiona 'n' para iniciar el ciclo, 'q' para salir.")
 
@@ -72,225 +70,250 @@ def main():
 
             frame_vis = frame.copy()
             
-            # --- ROTACIÓN DINÁMICA DE IMAGEN ---
-            # Si el brazo está rotado para la entrega, invertimos la imagen
-            if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ENTREGA]:
-                frame_vis = cv2.rotate(frame_vis, cv2.ROTATE_180)
+            # --- ROTACIÓN DINÁMICA DE IMAGEN REMOVIDA ---
+            # Ya no invertimos la imagen aunque el brazo rote para la entrega
 
-            dist_actual = brazo.obtener_distancia() # Nueva lectura del ToF
-            
+            dist_actual = brazo.obtener_distancia() 
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'): break
 
-            # Dibujar distancia (Z) y ángulos de servos coordinados
+            # Dibujar info
             z_coord = dist_actual
-            color_z = (0, 255, 0) if (Z_MIN_RECOLECCION <= z_coord <= Z_MAX_RECOLECCION) else (0, 255, 255)
-            cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), 
-                        cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
+            color_z = (0, 255, 0) if z_coord <= Z_LIMITE_FINAL else (0, 255, 255)
+            cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
             
-            s0, s1, s6, s15 = brazo.estado_actual[0], brazo.estado_actual[1], brazo.estado_actual[6], brazo.estado_actual[15]
-            cv2.putText(frame_vis, f"S0:{s0} | S1:{s1} | S6:{s6} | S15:{s15}", (10, 60), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
             # =================================================
 
             if estado_actual == Estado.HOME:
-                pos_objetivo_anterior = None # Resetear memoria
+                lockon_activado = False
                 if not macro_movimiento_hecho:
-                    print("[MOVIMIENTO] Sincronizando posición HOME...")
                     brazo.mover_a_estado("HOME", forzar=True)
                     macro_movimiento_hecho = True
                 
-                cv2.putText(frame_vis, "HOME - Esperando 'n'", (10, 100), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(frame_vis, "HOME - Esperando 'n'", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 if key == ord('n'):
                     estado_actual = Estado.OBSERVACION
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION:
                 if not macro_movimiento_hecho:
-                    print("[MOVIMIENTO] Moviendo a zona de observación...")
+                    iniciar_deteccion_pastillas(camara) # Luz 48
                     brazo.mover_a_estado("OBSERVACION")
-                    time.sleep(2) # Esperar a que la imagen se estabilice
+                    time.sleep(2) 
                     macro_movimiento_hecho = True
                 
                 frame_vis, colores = process_color_frame(frame_vis)
-                
-                if macro_movimiento_hecho and (COLOR_OBJETIVO in colores):
-                    print(f"[INFO] Objetivo '{COLOR_OBJETIVO}' detectado. Transicionando a RECOLECCION.")
+                if COLOR_OBJETIVO in colores:
                     estado_actual = Estado.RECOLECCION
                     macro_movimiento_hecho = False
-                else:
-                    cv2.putText(frame_vis, f"Buscando color: {COLOR_OBJETIVO}...", (10, 130), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
 
             elif estado_actual == Estado.RECOLECCION:
-                # Quitamos pos_anterior de aquí para que el detector use el centro de la pinza
-                frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower(), 
-                                                       dist_actual=dist_actual)
+                frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower(), dist_actual=dist_actual)
                 
-                if info:
-                    # Desempaquetar nuevos valores (incluye validación de visor)
-                    # ex, ey, area, esta_en_visor, dist_visor (si dist_actual < 125)
-                    ex, ey = info[0], info[1]
-                    area = info[2]
-                    esta_en_visor = info[3] if len(info) > 3 else False
-                    
-                    frames_sin_pastilla = 0
-                    
-                    # --- LÓGICA DE MOVIMIENTO SIMULTÁNEO (X, Y, Z) ---
+                if info or lockon_activado:
+                    ex, ey, area = info if info else (0, 0, 0)
                     targets = {} 
-                    tolerancia_vision = 12
                     
-                    # 1. Ajuste Horizontal (Base - S0)
-                    if abs(ex) > tolerancia_vision:
-                        paso_x = 1 if ex > 0 else -1
-                        targets[0] = brazo.estado_actual[0] + paso_x
+                    if not lockon_activado:
+                        # Centrado Horizontal (S0)
+                        if abs(ex) > 8:
+                            paso_x = 2 if abs(ex) > 60 else 1
+                            targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
+                        
+                        # Centrado Vertical Inteligente (S15 + S6)
+                        angulo_15 = brazo.estado_actual[15]
+                        angulo_6 = brazo.estado_actual[6]
+                        if abs(ey) > 10:
+                            if ey > 0: # Abajo -> Extender
+                                if angulo_15 < 180: angulo_15 += 1
+                                else: targets[6] = angulo_6 + 1
+                            else:      # Arriba -> Retraer
+                                if angulo_15 > 10: angulo_15 -= 1
+                                else: targets[6] = max(20, angulo_6 - 1)
+                        if angulo_15 != brazo.estado_actual[15]: targets[15] = angulo_15
+
+                    # Lógica de Descenso
+                    if z_coord > Z_UMBRAL_LOCKON:
+                        # Freno si la pastilla está en los bordes
+                        if abs(ex) < 50 and abs(ey) < 50:
+                            targets[1] = max(5, brazo.estado_actual[1] - 1)
+                            if 6 not in targets: targets[6] = max(20, brazo.estado_actual[6] - 1)
                     
-                    # 2. Ajuste de Profundidad (Especial: Pin 6 para Abajo, Pin 15 para Arriba)
-                    angulo_15 = brazo.estado_actual[15]
-                    angulo_6 = brazo.estado_actual[6]
+                    elif z_coord > Z_LIMITE_FINAL:
+                        if abs(ex) <= TOLERANCIA_CENTRADO and abs(ey) <= TOLERANCIA_CENTRADO:
+                            if not lockon_activado:
+                                print("[CONTROL] Centrado OK. Lock-On ACTIVADO.")
+                                lockon_activado = True
 
-                    if abs(ey) > tolerancia_vision:
-                        if ey > 0: # Abajo
-                            paso_y = 1
-                            angulo_6 += paso_y
-                        else: # Arriba
-                            paso_y = -1
-                            angulo_15 += paso_y
+                        if lockon_activado:
+                            # Fase 3: Bajada vertical (Solo S1) con compensación de inclinación
+                            targets[1] = max(5, brazo.estado_actual[1] - 1)
 
-                    # 3. Descenso Dinámico (Hombro/Codo - S1/S6)
-                    if z_coord > Z_MAX_RECOLECCION:
-                        vel_descenso = 2 if (abs(ex) < 30 and abs(ey) < 30) else 1
-                        targets[1] = max(5, brazo.estado_actual[1] - vel_descenso)
-                        angulo_6 = max(20, angulo_6 - 1)
-                        if abs(ey) < 20:
-                            angulo_15 = min(180, angulo_15 + 1)
-                    
-                    if angulo_15 != brazo.estado_actual[15]:
-                        targets[15] = angulo_15
-                    if angulo_6 != brazo.estado_actual[6]:
-                        targets[6] = angulo_6
+                            # COMPENSACIÓN DE INCLINACIÓN REFORZADA:
+                            # A medida que bajamos S1, subimos S15 para que la pinza no se incline hacia adelante
+                            if brazo.estado_actual[15] > 20:
+                                targets[15] = brazo.estado_actual[15] - 1 # Ajuste de 1:1 con S1
 
-                    # 4. Condición de Parada y VALIDACIÓN DE VISOR
-                    if (z_coord <= Z_MAX_RECOLECCION):
-                        # Solo pasamos a confirmación si la pastilla ESTÁ en el visor
-                        if esta_en_visor or dist_actual > 125: # Si no estamos en modo fino, basta con estar en rango Z
-                            print(f"[ToF] ZONA DE RECOLECCION ALCANZADA ({z_coord}mm) Y VALIDADA.")
-                            
-                            if OFFSET_X != 0 or OFFSET_Y != 0:
-                                brazo.mover_tiempo([
-                                    (0, brazo.estado_actual[0] + OFFSET_X),
-                                    (15, brazo.estado_actual[15] + OFFSET_Y),
-                                    (1, brazo.estado_actual[1] + OFFSET_Z )
-                                ])
-
-                            estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
-                            macro_movimiento_hecho = False
+                            cv2.putText(frame_vis, "LOCK-ON: BAJANDO...", (10, 80), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                         else:
-                            # LOCAL RE-SCAN: Estamos a la altura correcta pero la pastilla NO está en el visor
-                            cv2.putText(frame_vis, "ALINEANDO CON VISOR (RE-SCAN)...", (10, 160), 
+                            cv2.putText(frame_vis, "CENTRANDO FINAL...", (10, 80), 
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                            # Seguimos en este estado para que el bucle de arriba siga ajustando ex, ey
-                    
-                    # Enviar comandos
-                    if targets:
-                        lista_cmds = [(p, a) for p, a in targets.items()]
-                        brazo.mover_tiempo(lista_cmds, esperar=False)
 
-                else:
-                    frames_sin_pastilla += 1
-                    if frames_sin_pastilla >= 30: # Tolerancia aumentada
-                        if z_coord < 150:
-                            # Si estamos cerca, no regresamos a observación, intentamos re-ubicar localmente
-                            cv2.putText(frame_vis, "OBJETIVO PERDIDO - RE-ESCANEANDO LOCALMENTE", (10, 130), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                        else:
-                            print("[INFO] Pastilla perdida, regresando a observación.")
-                            estado_actual = Estado.OBSERVACION
-                            macro_movimiento_hecho = False
+                    # 3. Condición de Parada Final (75mm)
+                    if z_coord <= Z_LIMITE_FINAL:
+                        print(f"[ToF] POSICION DE AGARRE ALCANZADA ({z_coord}mm).")
+
+                        # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
+                        # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
+                        FINAL_CORRECTION_S0 = -4  # Grados extra para centrar X
+                        FINAL_CORRECTION_S15 = -5 # Grados extra para centrar Y (hacia arriba)
+
+                        print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
+                        brazo.mover_tiempo([
+                            (0, brazo.estado_actual[0] + FINAL_CORRECTION_S0),
+                            (15, brazo.estado_actual[15] + FINAL_CORRECTION_S15)
+                        ])
+
+                        estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
+                        finalizar_deteccion_pastillas(camara)
+                        macro_movimiento_hecho = False
+
+                    
+                    if targets:
+                        brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
-                cv2.putText(frame_vis, "OBJETIVO EN LA MIRA - Presiona 'c' para atrapar", (10, 90), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                
+                cv2.putText(frame_vis, "CONFIRMAR - Presiona 'c'", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 if key == ord('c'):
-                    print("[INFO] Confirmacion recibida. Cerrando pinza.")
-                    brazo.mover_tiempo([(12, 10)]) 
-                    time.sleep(1.2)
-                    brazo.mover_a_estado("PRE_RECOLECCION") 
+                    print("[CONTROL] Agarre confirmado. Levantando...")
+                    brazo.mover_tiempo([(12, 10)], esperar=True) 
+                    time.sleep(0.5)
+                    brazo.mover_a_estado("PRE_RECOLECCION", esperar=True) 
                     estado_actual = Estado.OBSERVACION_MANIQUI
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
                 if not macro_movimiento_hecho:
-                    brazo.mover_a_estado("ENTREGA")
-                    time.sleep(1)
+                    print("[CONTROL] Yendo a posición de entrega (Maniquí)...")
+                    iniciar_deteccion(camara)
+                    camara.set_led_brightness(255) 
+                    # Forzar movimiento completo con espera
+                    brazo.mover_a_estado("OBSERVACION_MANIQUI", forzar=True, esperar=True)
+                    time.sleep(0.5)
                     macro_movimiento_hecho = True
+                    lockon_activado_boca = False
+                
+                # Rotar frame para el maniquí
+                frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
+                frame_vis = frame_rotated.copy()
                 
                 frame_vis, coords_boca = get_mouth_coordinates(frame_vis)
                 if coords_boca:
-                    print("[INFO] Maniquí detectado. Centrando boca.")
                     estado_actual = Estado.SEGUIMIENTO_BOCA
                     macro_movimiento_hecho = False
                 else:
-                    cv2.putText(frame_vis, "Buscando boca del maniquí...", (10, 60), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+                    cv2.putText(frame_vis, "Buscando boca (Frame Rotado)...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
             elif estado_actual == Estado.SEGUIMIENTO_BOCA:
+                # Rotar frame para el maniquí
+                frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
+                frame_vis = frame_rotated.copy()
+                
                 frame_vis, coords_boca = get_mouth_coordinates(frame_vis)
                 
-                if coords_boca:
-                    # Calcular error respecto al centro de la cámara
-                    error_x = coords_boca[0] - (frame_vis.shape[1] // 2)
-                    error_y = coords_boca[1] - (frame_vis.shape[0] // 2)
+                if coords_boca or lockon_activado_boca:
+                    ex, ey = 0, 0
+                    if coords_boca:
+                        # Error con frame rotado
+                        ex_raw = coords_boca[0] - (frame_vis.shape[1] // 2)
+                        ey_raw = coords_boca[1] - (frame_vis.shape[0] // 2)
+                        
+                        # Invertir ejes por rotación de 180 grados
+                        ex = -ex_raw
+                        ey = -ey_raw
                     
-                    centrado = brazo.centrar_proporcional(error_x, error_y)
-                    if centrado:
-                        print("[INFO] Boca centrada. Soltando pastilla.")
+                    targets = {} 
+                    
+                    if not lockon_activado_boca:
+                        # Centrado Horizontal (S0)
+                        if abs(ex) > 8:
+                            paso_x = 2 if abs(ex) > 60 else 1
+                            targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
+                        
+                        # Centrado Vertical Inteligente (S15 + S6)
+                        angulo_15 = brazo.estado_actual[15]
+                        angulo_6 = brazo.estado_actual[6]
+                        if abs(ey) > 10:
+                            if ey > 0: # Abajo -> Extender
+                                if angulo_15 < 180: angulo_15 += 1
+                                else: targets[6] = angulo_6 + 1
+                            else:      # Arriba -> Retraer
+                                if angulo_15 > 10: angulo_15 -= 1
+                                else: targets[6] = max(20, angulo_6 - 1)
+                        if angulo_15 != brazo.estado_actual[15]: targets[15] = angulo_15
+
+                    # Lógica de Descenso (Acercamiento al maniquí)
+                    if z_coord > Z_UMBRAL_LOCKON:
+                        # Freno si la boca está en los bordes
+                        if abs(ex) < 50 and abs(ey) < 50:
+                            targets[1] = max(5, brazo.estado_actual[1] - 1)
+                            if 6 not in targets: targets[6] = max(20, brazo.estado_actual[6] - 1)
+                    
+                    elif z_coord > Z_LIMITE_FINAL:
+                        if abs(ex) <= TOLERANCIA_CENTRADO and abs(ey) <= TOLERANCIA_CENTRADO:
+                            if not lockon_activado_boca:
+                                print("[CONTROL] Centrado Boca OK. Lock-On ACTIVADO.")
+                                lockon_activado_boca = True
+
+                        if lockon_activado_boca:
+                            # Fase 3: Bajada vertical (Solo S1) con compensación de inclinación
+                            targets[1] = max(5, brazo.estado_actual[1] - 1)
+
+                            # COMPENSACIÓN DE INCLINACIÓN REFORZADA:
+                            if brazo.estado_actual[15] > 20:
+                                targets[15] = brazo.estado_actual[15] - 1 
+
+                            cv2.putText(frame_vis, "LOCK-ON BOCA: ACERCANDO...", (10, 80), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        else:
+                            cv2.putText(frame_vis, "CENTRANDO BOCA FINAL...", (10, 80), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+                    # 3. Condición de Parada Final
+                    if z_coord <= Z_LIMITE_FINAL:
+                        print(f"[ToF] POSICION DE ENTREGA ALCANZADA ({z_coord}mm).")
+                        finalizar_deteccion(camara)
                         estado_actual = Estado.ENTREGA
                         macro_movimiento_hecho = False
+
+                    if targets:
+                        brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
                 else:
-                    # Si perdemos el maniquí, regresamos a buscarlo
                     estado_actual = Estado.OBSERVACION_MANIQUI
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.ENTREGA:
-                print("[INFO] Liberando carga.")
-                # Abrir pinza (90 grados abre)
                 brazo.mover_tiempo([(12, 90)])
-
                 time.sleep(1)
-                
-                print("[INFO] Ciclo finalizado satisfactoriamente.")
                 estado_actual = Estado.HOME
                 macro_movimiento_hecho = False
 
-            # --- UI de Visualización ---
-            cv2.putText(frame_vis, f"ESTADO: {estado_actual}", (10, frame_vis.shape[0] - 20), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame_vis, f"ESTADO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
 
     except KeyboardInterrupt:
-        print("\n[INFO] Ejecución cancelada por el usuario.")
-    except Exception as e:
-        print(f"\n[ERROR CRÍTICO] {e}")
+        print("\nEjecución cancelada.")
     finally:
-        print("\n[SEGURIDAD] Iniciando secuencia de apagado suave...")
+        print("\nApagando...")
         try:
-            # Reintentar conexión si se cerró bruscamente
-            if not brazo.esp32 or not brazo.esp32.is_open:
-                brazo.conectar()
-            
-            # Regresar a HOME usando la lógica sincronizada
+            if camara: camara.set_led_brightness(0)
             brazo.mover_a_estado("HOME")
-            time.sleep(2) # Dar tiempo para terminar el movimiento
             brazo.cerrar()
             camara.liberar()
-        except:
-            print("[ADVERTENCIA] No se pudo completar el regreso a HOME de forma segura.")
+        except: pass
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":

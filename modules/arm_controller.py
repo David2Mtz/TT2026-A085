@@ -143,7 +143,7 @@ class ArmController:
     def centrar_proporcional(self, error_x, error_y):
         """Ajuste inteligente basado en un controlador Proporcional."""
         tolerancia = 10
-        kp_x = -0.01 
+        kp_x = 0.02 
         kp_y = 0.02  
         max_paso = 3 
         

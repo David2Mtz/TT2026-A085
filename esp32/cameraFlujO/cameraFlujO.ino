@@ -18,12 +18,23 @@
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
+// Pin del LED Flash incorporado (GPIO 4 en la mayoría de ESP32-CAM AI-Thinker)
+#define FLASH_GPIO_NUM    4
+
+// Configuración PWM para el LED
+const int ledChannel = 7; 
+const int freq = 5000;
+const int ledResolution = 8; // Renombrado para evitar conflictos
+const int dutyCycle = 0; // 50% de brillo (0-255)
 
 void setup() {
   Serial.begin(460800); 
-  
-  camera_config_t config;
-  config.ledc_channel = LEDC_CHANNEL_0;
+
+  // Configurar LED con la nueva API de ESP32 Core 3.x
+  ledcAttach(FLASH_GPIO_NUM, freq, ledResolution);
+  ledcWrite(FLASH_GPIO_NUM, dutyCycle);
+
+  camera_config_t config;  config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
   config.pin_d0 = Y2_GPIO_NUM;
   config.pin_d1 = Y3_GPIO_NUM;
@@ -44,7 +55,7 @@ void setup() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
   config.frame_size = FRAMESIZE_VGA;
-  config.jpeg_quality = 30;
+  config.jpeg_quality = 25;
   config.fb_count = 1;
   
   esp_err_t err = esp_camera_init(&config);
@@ -57,31 +68,45 @@ void setup() {
 void loop() {
   if (Serial.available() > 0) {
     char comando = Serial.read();
-    
+
     if (comando == 'R') {
-      // Limpiar cualquier basura en el buffer antes de enviar
-      Serial.flush(); 
-      
+      // Limpiar basura del buffer de ENTRADA antes de procesar
+      while(Serial.available() > 0) Serial.read();
+
       camera_fb_t * fb = esp_camera_fb_get();
-      
+
       if (!fb) {
-        Serial.print("ERR_"); // 4 bytes para no romper la lectura si falla
+        Serial.print("ERR_"); 
         return;
       }
-      
+
       uint32_t image_len = fb->len;
-      
-      // 1. Enviar palabra clave de sincronización (4 bytes)
+
+      // 1. Enviar palabra clave de sincronización
       Serial.write((const uint8_t*)"IMG:", 4);
-      
-      // 2. Enviar la longitud exacta de la imagen (4 bytes)
+
+      // 2. Enviar la longitud
       Serial.write((const uint8_t*)&image_len, 4);
-      
+
       // 3. Enviar la imagen
       Serial.write(fb->buf, fb->len);
-      
+
+      // flush() aquí asegura que los datos salgan antes de liberar el frame
       Serial.flush();
       esp_camera_fb_return(fb);
+    } 
+    else if (comando == 'L') {
+      // Esperar el byte de brillo con un timeout para evitar bloqueos
+      unsigned long start = millis();
+      while (Serial.available() == 0 && (millis() - start < 50)) {
+        delay(1);
+      }
+
+      if (Serial.available() > 0) {
+        int brillo = Serial.read();
+        brillo = constrain(brillo, 0, 255);
+        ledcWrite(FLASH_GPIO_NUM, brillo);
+      }
     }
   }
 }
