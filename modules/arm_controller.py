@@ -79,13 +79,12 @@ class ArmController:
                             linea = linea.strip()
                             if linea == "OK":
                                 self.event_ok.set()
-                            elif linea == "STATE:EMERGENCY_STOP":
-                                print("\a[ALERTA] PARO DE EMERGENCIA DETECTADO")
-                                self.en_emergencia = True
-                                self.event_ok.set() # Liberar cualquier espera de movimiento
-                            elif linea == "STATE:READY":
-                                print("[INFO] Sistema rearmado y listo.")
-                                self.en_emergencia = False
+                            elif "boton precionado" in linea:
+                                print("\n" + "!"*50)
+                                print("!!! PARO DE EMERGENCIA FÍSICO DETECTADO !!!")
+                                print("!!! CERRANDO SISTEMA INMEDIATAMENTE     !!!")
+                                print("!"*50 + "\n")
+                                os._exit(0)
                             elif linea.startswith("DIST:"):
                                 try:
                                     nueva_dist = int(linea.split(":")[1])
@@ -110,7 +109,10 @@ class ArmController:
 
         necesarios = []
         for p, a in movimientos:
-            ang = max(0, min(180, a))
+            # Límite extendido para el Pin 13 (Roll), 180 para los demás
+            limite = 270 if p == 13 else 180
+            ang = max(0, min(limite, a))
+            
             if forzar or self.estado_actual.get(p) != ang:
                 necesarios.append((p, ang))
         

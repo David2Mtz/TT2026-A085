@@ -176,7 +176,7 @@ def main():
 
                         # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
                         # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
-                        FINAL_CORRECTION_S0 = -4  # Grados extra para centrar X
+                        FINAL_CORRECTION_S0 = -3  # Grados extra para centrar X
                         FINAL_CORRECTION_S15 = -5 # Grados extra para centrar Y (hacia arriba)
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")

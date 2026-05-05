@@ -7,8 +7,8 @@ def detect_mouth_landmarks_by_color(frame):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
     # Rango Magenta/Rosa Neón (Ajustado para ser muy sensible)
-    lower_magenta = np.array([140, 80, 80])
-    upper_magenta = np.array([175, 255, 255])
+    lower_magenta = np.array([135, 60, 40])
+    upper_magenta = np.array([180, 255, 255])
     
     mask = cv2.inRange(hsv, lower_magenta, upper_magenta)
     
