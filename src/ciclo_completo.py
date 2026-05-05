@@ -40,6 +40,7 @@ class Estado:
     OBSERVACION_MANIQUI = "OBSERVACION_MANIQUI"
     SEGUIMIENTO_BOCA = "SEGUIMIENTO_BOCA"
     ENTREGA = "ENTREGA"
+    EMERGENCIA = "EMERGENCIA"
 
 def main():
     print("--- INICIANDO CICLO COMPLETO (PASTILLAS) ---")
@@ -76,6 +77,13 @@ def main():
             dist_actual = brazo.obtener_distancia() 
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'): break
+
+            # --- DETECCIÓN DE EMERGENCIA ---
+            if brazo.en_emergencia and estado_actual != Estado.EMERGENCIA:
+                print("[SISTEMA] Entrando en modo EMERGENCIA...")
+                estado_anterior = estado_actual # Guardar para posible reanudación
+                estado_actual = Estado.EMERGENCIA
+                macro_movimiento_hecho = False
 
             # Dibujar info
             z_coord = dist_actual
@@ -301,6 +309,16 @@ def main():
                 estado_actual = Estado.HOME
                 macro_movimiento_hecho = False
 
+            elif estado_actual == Estado.EMERGENCIA:
+                cv2.rectangle(frame_vis, (0, 0), (frame_vis.shape[1], frame_vis.shape[0]), (0, 0, 150), 10)
+                cv2.putText(frame_vis, "!!! PARO DE EMERGENCIA !!!", (50, 150), cv2.FONT_HERSHEY_DUPLEX, 1.2, (0, 0, 255), 3)
+                cv2.putText(frame_vis, "LIBERA EL BOTON PARA REINICIAR", (80, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
+                if not brazo.en_emergencia:
+                    print("[SISTEMA] Emergencia liberada. Regresando a HOME.")
+                    estado_actual = Estado.HOME
+                    macro_movimiento_hecho = False
+
             cv2.putText(frame_vis, f"ESTADO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
 
@@ -310,7 +328,8 @@ def main():
         print("\nApagando...")
         try:
             if camara: camara.set_led_brightness(0)
-            brazo.mover_a_estado("HOME")
+            # Agregamos esperar=True para que el movimiento suave se complete antes de cerrar
+            brazo.mover_a_estado("HOME", forzar=True, esperar=True)
             brazo.cerrar()
             camara.liberar()
         except: pass

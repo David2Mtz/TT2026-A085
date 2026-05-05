@@ -17,6 +17,7 @@ class ArmController:
         self.intentos_y = 0
         self.esp32 = None
         self.running = True
+        self.en_emergencia = False  # Nueva variable de estado
         self.lock = threading.Lock()
         self.event_ok = threading.Event() # Evento para esperar el 'OK'
         
@@ -78,6 +79,13 @@ class ArmController:
                             linea = linea.strip()
                             if linea == "OK":
                                 self.event_ok.set()
+                            elif linea == "STATE:EMERGENCY_STOP":
+                                print("\a[ALERTA] PARO DE EMERGENCIA DETECTADO")
+                                self.en_emergencia = True
+                                self.event_ok.set() # Liberar cualquier espera de movimiento
+                            elif linea == "STATE:READY":
+                                print("[INFO] Sistema rearmado y listo.")
+                                self.en_emergencia = False
                             elif linea.startswith("DIST:"):
                                 try:
                                     nueva_dist = int(linea.split(":")[1])
@@ -96,6 +104,9 @@ class ArmController:
 
     def mover_tiempo(self, movimientos, forzar=False, esperar=True):
         if not self.esp32 or not self.esp32.is_open: return
+        if self.en_emergencia:
+            print("[BRAZO] Comando ignorado: El sistema está en PARO DE EMERGENCIA.")
+            return
 
         necesarios = []
         for p, a in movimientos:
