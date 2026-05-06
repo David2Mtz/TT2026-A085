@@ -3,19 +3,28 @@ import numpy as np
 import os
 
 def detect_mouth_landmarks_by_color(frame):
+    h, w = frame.shape[:2]
     # 1. Conversión a HSV
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
-    # Rango Magenta/Rosa Neón (Ajustado para ser muy sensible)
-    lower_magenta = np.array([135, 60, 40])
+    # Rango para el nuevo rosa brillante (Cerca del límite de rojo en HSV)
+    lower_magenta = np.array([150, 80, 50]) 
     upper_magenta = np.array([180, 255, 255])
     
     mask = cv2.inRange(hsv, lower_magenta, upper_magenta)
     
+    # --- MÁSCARA DE ÁREA DE INTERÉS (ROI) ---
+    # Ignorar bordes laterales (15% cada lado)
+    mask[:, :int(w*0.15)] = 0
+    mask[:, int(w*0.85):] = 0
+    
+    # Ignorar la mitad inferior del frame (donde está la pinza y la pastilla)
+    mask[int(h*0.55):, :] = 0
+    
     # 2. Limpieza de ruido
-    kernel = np.ones((5, 5), np.uint8)
+    kernel = np.ones((3, 3), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.dilate(mask, kernel, iterations=1)
     
     # 3. Encontrar contornos
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -23,29 +32,50 @@ def detect_mouth_landmarks_by_color(frame):
     candidates = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if 15 < area < 5000:
-            M = cv2.moments(cnt)
-            if M["m00"] != 0:
-                cx = int(M["m10"] / M["m00"])
-                cy = int(M["m01"] / M["m00"])
-                candidates.append((cx, cy))
+        # Marcadores de boca: aumentamos el área máxima (los nuevos son más grandes)
+        if 50 < area < 4000:
+            # Filtro de circularidad aún más permisivo
+            perimetro = cv2.arcLength(cnt, True)
+            if perimetro > 0:
+                circularidad = 4 * np.pi * (area / (perimetro * perimetro))
+                if circularidad > 0.2: 
+                    M = cv2.moments(cnt)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        candidates.append((cx, cy))
 
-    # --- LÓGICA DE FILTRADO (CLUSTERING) ---
+    # --- LÓGICA DE FILTRADO (CLUSTERING OPTIMIZADO) ---
     if len(candidates) < 4:
         return None, None
 
-    # Si hay más de 4, tomamos los 4 puntos que estén más cerca entre sí (Cluster más compacto)
+    # Si hay demasiados candidatos, tomamos solo los más centrales para no saturar la CPU
+    if len(candidates) > 8:
+        centro_x_frame = w // 2
+        candidates = sorted(candidates, key=lambda p: abs(p[0] - centro_x_frame))[:8]
+
+    # Búsqueda del cluster de 4 puntos más compacto
     if len(candidates) > 4:
+        from itertools import combinations
         min_dist_sum = float('inf')
         best_landmarks = candidates[:4]
-        from itertools import combinations
+        
+        # Con 8 candidatos hay 70 combinaciones, lo cual es manejable (antes era ilimitado)
         for combo in combinations(candidates, 4):
             combo_pts = np.array(combo)
-            centroide = np.mean(combo_pts, axis=0)
-            dist_sum = np.sum(np.linalg.norm(combo_pts - centroide, axis=1))
+            # Cálculo rápido de compacidad: dispersión máxima entre puntos
+            # (Más rápido que calcular centroide y distancias para cada punto)
+            dist_sum = 0
+            for i in range(4):
+                for j in range(i + 1, 4):
+                    dist_sum += np.linalg.norm(combo_pts[i] - combo_pts[j])
+            
             if dist_sum < min_dist_sum:
-                min_dist_sum = dist_sum
-                best_landmarks = list(combo)
+                # Validación rápida de forma: no deben estar todos en línea (área mínima)
+                hull = cv2.convexHull(combo_pts.astype(np.int32))
+                if cv2.contourArea(hull) > 150:
+                    min_dist_sum = dist_sum
+                    best_landmarks = list(combo)
         landmarks = best_landmarks
     else:
         landmarks = candidates

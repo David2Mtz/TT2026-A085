@@ -56,14 +56,25 @@ void setup() {
   Serial.println("SYSTEM_READY");
 }
 
+bool lastButtonState = false;
+
 void loop() {
-  if (digitalRead(BUTTON_PIN) == HIGH) {
+  bool currentButtonState = (digitalRead(BUTTON_PIN) == HIGH);
+  
+  if (currentButtonState) {
+    if (!lastButtonState) {
+      Serial.println("boton precionado");
+      lastButtonState = true;
+    }
     while(Serial.available() > 0) Serial.read(); 
-    Serial.println("boton precionado");
     int p[16]; for(int i=0; i<16; i++) p[i] = i;
     moverSimultaneo(p, angulosHome, 16, true);
   } 
   else {
+    if (lastButtonState) {
+      Serial.println("boton liberado");
+      lastButtonState = false;
+    }
     if (Serial.available() > 0) {
       if (Serial.peek() == '$') {
         Serial.read();
@@ -141,7 +152,10 @@ void moverSimultaneo(int pines[], int destinos[], int cantidad, bool forzar) {
   if (numPasos < 1) numPasos = 1;
 
   for (int p = 1; p <= numPasos; p++) {
-    if (!forzar && digitalRead(BUTTON_PIN) == HIGH) return;
+    if (!forzar && digitalRead(BUTTON_PIN) == HIGH) {
+      Serial.println("boton precionado");
+      return;
+    }
     if (forzar) {
       while(Serial.available() > 0) Serial.read();
       if (p % 10 == 0) Serial.println("boton precionado");

@@ -80,11 +80,16 @@ class ArmController:
                             if linea == "OK":
                                 self.event_ok.set()
                             elif "boton precionado" in linea:
+                                with self.lock:
+                                    self.en_emergencia = True
                                 print("\n" + "!"*50)
-                                print("!!! PARO DE EMERGENCIA FÍSICO DETECTADO !!!")
-                                print("!!! CERRANDO SISTEMA INMEDIATAMENTE     !!!")
+                                print("!!! PARO DE EMERGENCIA DETECTADO !!!")
                                 print("!"*50 + "\n")
-                                os._exit(0)
+                                # No cerramos el programa, dejamos que ciclo_completo lo maneje
+                            elif "boton liberado" in linea:
+                                with self.lock:
+                                    self.en_emergencia = False
+                                print("[SISTEMA] Botón de emergencia liberado.")
                             elif linea.startswith("DIST:"):
                                 try:
                                     nueva_dist = int(linea.split(":")[1])

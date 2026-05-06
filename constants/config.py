@@ -2,5 +2,5 @@
 
 # Offsets de la pinza respecto al centro de la cámara
 # Estos valores se usan para compensar el "punto ciego" mecánico
-OFFSET_X = 10
+OFFSET_X = -30
 OFFSET_Y = -230
