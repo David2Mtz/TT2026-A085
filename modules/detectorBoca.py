@@ -7,19 +7,27 @@ def detect_mouth_landmarks_by_color(frame):
     # 1. Conversión a HSV
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
-    # Rango para el nuevo rosa brillante (Cerca del límite de rojo en HSV)
-    lower_magenta = np.array([150, 80, 50]) 
-    upper_magenta = np.array([180, 255, 255])
+    # --- RANGO DUAL DE COLORES (MAGENTA + NARANJA NEÓN) ---
+    # Rango Magenta/Rosa Neón (Muy saturado y brillante para evitar piel)
+    lower_magenta = np.array([145, 120, 100]) 
+    upper_magenta = np.array([175, 255, 255])
+    mask_magenta = cv2.inRange(hsv, lower_magenta, upper_magenta)
     
-    mask = cv2.inRange(hsv, lower_magenta, upper_magenta)
+    # Rango Naranja Neón (Extremadamente saturado)
+    lower_orange = np.array([5, 180, 120]) 
+    upper_orange = np.array([18, 255, 255])
+    mask_orange = cv2.inRange(hsv, lower_orange, upper_orange)
+    
+    # Combinar ambas máscaras
+    mask = cv2.bitwise_or(mask_magenta, mask_orange)
     
     # --- MÁSCARA DE ÁREA DE INTERÉS (ROI) ---
-    # Ignorar bordes laterales (15% cada lado)
-    mask[:, :int(w*0.15)] = 0
-    mask[:, int(w*0.85):] = 0
+    # Ignorar bordes laterales (10% cada lado para dar más margen)
+    mask[:, :int(w*0.10)] = 0
+    mask[:, int(w*0.90):] = 0
     
-    # Ignorar la mitad inferior del frame (donde está la pinza y la pastilla)
-    mask[int(h*0.55):, :] = 0
+    # Ignorar la parte inferior (dejamos el 70% superior para dar más margen vertical)
+    mask[int(h*0.70):, :] = 0
     
     # 2. Limpieza de ruido
     kernel = np.ones((3, 3), np.uint8)
@@ -32,46 +40,44 @@ def detect_mouth_landmarks_by_color(frame):
     candidates = []
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        # Marcadores de boca: aumentamos el área máxima (los nuevos son más grandes)
-        if 50 < area < 4000:
-            # Filtro de circularidad aún más permisivo
+        # Marcadores de boca: rango amplio para cercanía/lejanía
+        if 20 < area < 6000:
+            # Filtro de circularidad muy bajo para aceptar formas movidas (desenfoque)
             perimetro = cv2.arcLength(cnt, True)
             if perimetro > 0:
                 circularidad = 4 * np.pi * (area / (perimetro * perimetro))
-                if circularidad > 0.2: 
+                if circularidad > 0.1: 
                     M = cv2.moments(cnt)
                     if M["m00"] != 0:
                         cx = int(M["m10"] / M["m00"])
                         cy = int(M["m01"] / M["m00"])
                         candidates.append((cx, cy))
 
-    # --- LÓGICA DE FILTRADO (CLUSTERING OPTIMIZADO) ---
+    # --- LÓGICA DE FILTRADO (CLUSTERING OPTIMIZADO PARA 8 PUNTOS) ---
     if len(candidates) < 4:
         return None, None
 
-    # Si hay demasiados candidatos, tomamos solo los más centrales para no saturar la CPU
-    if len(candidates) > 8:
+    # Si hay muchos candidatos (ahora con 2 colores es probable), tomamos los 12 más centrales
+    if len(candidates) > 12:
         centro_x_frame = w // 2
-        candidates = sorted(candidates, key=lambda p: abs(p[0] - centro_x_frame))[:8]
+        candidates = sorted(candidates, key=lambda p: abs(p[0] - centro_x_frame))[:12]
 
-    # Búsqueda del cluster de 4 puntos más compacto
+    # Búsqueda del cluster de 4 puntos más compacto (suficiente para definir el centro)
     if len(candidates) > 4:
         from itertools import combinations
         min_dist_sum = float('inf')
         best_landmarks = candidates[:4]
         
-        # Con 8 candidatos hay 70 combinaciones, lo cual es manejable (antes era ilimitado)
+        # Con 12 candidatos y grupos de 4, tenemos 495 combinaciones (CPU amigable)
         for combo in combinations(candidates, 4):
             combo_pts = np.array(combo)
-            # Cálculo rápido de compacidad: dispersión máxima entre puntos
-            # (Más rápido que calcular centroide y distancias para cada punto)
             dist_sum = 0
             for i in range(4):
                 for j in range(i + 1, 4):
                     dist_sum += np.linalg.norm(combo_pts[i] - combo_pts[j])
             
             if dist_sum < min_dist_sum:
-                # Validación rápida de forma: no deben estar todos en línea (área mínima)
+                # El área debe ser suficiente para no ser un punto de ruido
                 hull = cv2.convexHull(combo_pts.astype(np.int32))
                 if cv2.contourArea(hull) > 150:
                     min_dist_sum = dist_sum
@@ -110,7 +116,7 @@ def detect_mouth_landmarks_by_color(frame):
 
     # Feedback visual
     cv2.drawMarker(frame, centro_objetivo, (0, 0, 255), cv2.MARKER_CROSS, 25, 2)
-    cv2.putText(frame, "Boca (Magenta)", (avg_x + 15, avg_y), 
+    cv2.putText(frame, "Boca (Detección Dual)", (avg_x + 15, avg_y), 
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
     
     return centro_objetivo, pts_dict
@@ -118,7 +124,7 @@ def detect_mouth_landmarks_by_color(frame):
 def get_mouth_by_color(frame):
     """
     Alias para compatibilidad con mouth_detector.py.
-    Retorna solo el centro del objetivo basado en los 4 marcadores Lima.
+    Retorna solo el centro del objetivo basado en los marcadores de color.
     """
     centro, _ = detect_mouth_landmarks_by_color(frame)
     return centro
@@ -126,7 +132,7 @@ def get_mouth_by_color(frame):
 def get_mouth_coordinates(frame):
     """
     Función de compatibilidad para ciclo_completo.py.
-    Detecta la boca EXCLUSIVAMENTE por color (4 puntos Lima).
+    Detecta la boca EXCLUSIVAMENTE por color (Esquema Dual Magenta/Naranja).
     """
     centro, _ = detect_mouth_landmarks_by_color(frame)
     return frame, centro

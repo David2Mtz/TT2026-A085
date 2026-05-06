@@ -28,7 +28,7 @@ load_dotenv()
 # ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Azul" 
+COLOR_OBJETIVO = "Verde" 
 
 from constants.config import OFFSET_X, OFFSET_Y
 
@@ -288,23 +288,27 @@ def main():
                             paso_x = 2 if abs(ex) > 60 else 1
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
-                        # Centrado Vertical Dinámico (S15)
+                        # Centrado Vertical Dinámico (S15 + S6)
                         if abs(ey) > 10:
-                            # S15 ajusta la inclinación para centrar la boca en el eje Y
+                            # S15: Ajuste fino de inclinación
                             paso_y = 1
                             targets[15] = brazo.estado_actual[15] + (paso_y if ey > 0 else -paso_y)
+                            
+                            # S6: Compensación de altura del antebrazo (S6 aumenta para bajar)
+                            # Solo corregimos con S6 si el error es significativo para no oscilar
+                            if abs(ey) > 30:
+                                targets[6] = brazo.estado_actual[6] + (1 if ey > 0 else -1)
 
                     # Lógica de ACERCAMIENTO COORDINADO (Extensión S1 + S6)
                     if z_coord > Z_LIMITE_ENTREGA:
-                        # EXTENDER: Bajar S1 y S6 para proyectar el brazo hacia adelante
-                        # S1 en maniqui (140) -> Bajar para estirar
+                        # S1: Progresión constante hacia adelante
                         if brazo.estado_actual[1] > 70:
                             targets[1] = brazo.estado_actual[1] - 1
                         
-                        # S6 en maniqui (120) -> Bajar hacia 0 para estirar el codo
-                        # Aumentamos el paso de S6 a 2 para que la extensión sea más evidente y coordinada
-                        if brazo.estado_actual[6] > 0:
-                            targets[6] = max(0, brazo.estado_actual[6] - 2)
+                        # S6: Ayuda a la extensión solo si la boca está centrada verticalmente
+                        # Si ey > 0 (boca abajo), detenemos la extensión de S6 para que el hombro S1 baje más
+                        if 6 not in targets and brazo.estado_actual[6] > 0:
+                            targets[6] = brazo.estado_actual[6] - 1
                         
                         if z_coord <= Z_UMBRAL_LOCKON and abs(ex) <= TOLERANCIA_CENTRADO:
                             if not lockon_activado_boca:
@@ -325,9 +329,9 @@ def main():
                     # LÓGICA DE SONDEO (Si perdemos la boca)
                     contador_sondeo += 1
                     
-                    if contador_sondeo < 40: # Intentar buscar por 2 segundos aprox
-                        # Sondeo lateral oscilante (S0)
-                        offset = 5 * np.sin(contador_sondeo * 0.5)
+                    if contador_sondeo < 100: # Dar más tiempo al sondeo lento
+                        # Sondeo lateral oscilante (S0) más lento para evitar desenfoque
+                        offset = 8 * np.sin(contador_sondeo * 0.15)
                         brazo.mover_tiempo([(0, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
                         cv2.putText(frame_vis, "SONDEO DE BOCA...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     else:
