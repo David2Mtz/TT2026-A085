@@ -4,7 +4,21 @@ import os
 import cv2
 import time
 import numpy as np
+import dlib
+from scipy.spatial import distance as dist
+from imutils import face_utils
+import imutils
 from dotenv import load_dotenv
+
+# ... (rest of imports)
+
+#------definir función para calcular el EAR-----------#
+def calculate_EAR(eye):
+    y1 = dist.euclidean(eye[1], eye[5])
+    y2 = dist.euclidean(eye[2], eye[4])
+    x1 = dist.euclidean(eye[0], eye[3])
+    EAR = (y1 + y2) / x1
+    return EAR
 
 # Corrección de ruta para importar módulos desde la raíz del proyecto
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -19,6 +33,7 @@ from modules.pastillas_detector import (
 from modules.detectarColor import process_color_frame
 from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, finalizar_deteccion
 from modules.auto_exposure import AutoExposureControl
+from modules.blinkDetector import BlinkDetector
 from constants.posiciones import POSICIONES
 
 # Cargar variables de entorno
@@ -57,6 +72,9 @@ def main():
 
     auto_exp = AutoExposureControl(target_brightness=130)
 
+    # --- CONFIGURACIÓN DE PARPADEO (Cámara Laptop) ---
+    detector_parpadeo = BlinkDetector(target_blinks=3, window_time=3.0)
+
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
     
@@ -75,7 +93,7 @@ def main():
     contador_sondeo_color = 0
     fase_sondeo_color = "IZQUIERDA" # Inicia buscando a la izquierda
     
-    print("Presiona 'n' para iniciar el ciclo, 'q' para salir.")
+    print("Sistema listo. Parpadea 3 veces para iniciar el ciclo.")
 
     try:
         while True:
@@ -94,7 +112,6 @@ def main():
             # --- DETECCIÓN DE EMERGENCIA ---
             if brazo.en_emergencia and estado_actual != Estado.EMERGENCIA:
                 print("[SISTEMA] Entrando en modo EMERGENCIA...")
-                estado_anterior = estado_actual # Guardar para posible reanudación
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
             
@@ -106,10 +123,15 @@ def main():
                 lockon_activado = False
                 if not macro_movimiento_hecho:
                     brazo.mover_a_estado("HOME", forzar=True)
+                    detector_parpadeo.start_cam() # Iniciar cámara de laptop en HOME
                     macro_movimiento_hecho = True
                 
-                cv2.putText(frame_vis, "HOME - Esperando 'n'", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                if key == ord('n'):
+                cv2.putText(frame_vis, "HOME - Parpadea 3 veces", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                
+                # Activar ciclo por parpadeo o tecla 'n'
+                if detector_parpadeo.check_for_trigger() or key == ord('n'):
+                    print("[SISTEMA] Intención detectada. Iniciando ciclo...")
+                    detector_parpadeo.stop_cam() # Detener cámara de laptop al iniciar
                     estado_actual = Estado.OBSERVACION
                     macro_movimiento_hecho = False
 
