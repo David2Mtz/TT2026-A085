@@ -1,6 +1,6 @@
 #include "esp_camera.h"
 
-// [Mantén todos tus #define de los pines aquí exactamente igual]
+// Pines para AI-Thinker
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM      0
@@ -17,11 +17,18 @@
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
+#define FLASH_GPIO_NUM     4
 
+const int freq = 5000;
+const int ledResolution = 8;
+sensor_t * s; // Puntero para ajustes del sensor
 
 void setup() {
   Serial.begin(460800); 
-  
+
+  ledcAttach(FLASH_GPIO_NUM, freq, ledResolution);
+  ledcWrite(FLASH_GPIO_NUM, 0);
+
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -44,14 +51,19 @@ void setup() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
   config.frame_size = FRAMESIZE_VGA;
-  config.jpeg_quality = 30;
+  config.jpeg_quality = 12; // Calidad mejorada para detección
   config.fb_count = 1;
-  
+
   esp_err_t err = esp_camera_init(&config);
-  if (err != ESP_OK) {
-    delay(1000);
-    ESP.restart();
-  }
+  if (err != ESP_OK) { ESP.restart(); }
+
+  s = esp_camera_sensor_get();
+  // Bloqueo de controles automáticos para visión artificial estable
+  s->set_gain_ctrl(s, 0);      // 0 = Ganancia manual
+  s->set_agc_gain(s, 0);       // Ganancia al mínimo (0-30)
+  s->set_exposure_ctrl(s, 0);       // 0 = Exposición manual (CRÍTICO)
+  s->set_aec_value(s, 300);    // Valor inicial estándar
+  s->set_awb_gain(s, 1);       
 }
 
 void loop() {
@@ -59,29 +71,32 @@ void loop() {
     char comando = Serial.read();
     
     if (comando == 'R') {
-      // Limpiar cualquier basura en el buffer antes de enviar
-      Serial.flush(); 
-      
+      while(Serial.available() > 0) Serial.read();
       camera_fb_t * fb = esp_camera_fb_get();
-      
-      if (!fb) {
-        Serial.print("ERR_"); // 4 bytes para no romper la lectura si falla
-        return;
-      }
-      
-      uint32_t image_len = fb->len;
-      
-      // 1. Enviar palabra clave de sincronización (4 bytes)
+      if (!fb) return;
       Serial.write((const uint8_t*)"IMG:", 4);
-      
-      // 2. Enviar la longitud exacta de la imagen (4 bytes)
+      uint32_t image_len = fb->len;
       Serial.write((const uint8_t*)&image_len, 4);
-      
-      // 3. Enviar la imagen
       Serial.write(fb->buf, fb->len);
-      
       Serial.flush();
       esp_camera_fb_return(fb);
+    } 
+    else if (comando == 'L') {
+      unsigned long start = millis();
+      while (Serial.available() == 0 && (millis() - start < 50));
+      if (Serial.available() > 0) {
+        ledcWrite(FLASH_GPIO_NUM, Serial.read());
+      }
+    }
+    else if (comando == 'E') { // Comando para Exposición (2 bytes)
+      unsigned long start = millis();
+      while (Serial.available() < 2 && (millis() - start < 100));
+      if (Serial.available() >= 2) {
+        uint8_t msb = Serial.read();
+        uint8_t lsb = Serial.read();
+        int val = (msb << 8) | lsb;
+        s->set_aec_value(s, constrain(val, 0, 1200));
+      }
     }
   }
 }

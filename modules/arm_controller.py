@@ -1,150 +1,178 @@
-# modules/arm_controller.py
 import os
 import serial
 import time
+import threading
 from dotenv import load_dotenv
 from constants.posiciones import POSICIONES
 
 load_dotenv()
 
 class ArmController:
-    def __init__(self, puerto=None, baudios=9600):
+    def __init__(self, puerto=None, baudios=115200):
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
-        # Estado inicial (Gemelo Digital) - Actualizado con nuevos pines
-        self.estado_actual = {0: 90, 1: 180, 3: 140, 7: 20, 10: 170, 15: 80}
-        self.intentos_y = 0 # Contador para asistencia del servo 3
+        # Estado inicial sincronizado con el firmware
+        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 13: 0, 12: 90}
+        self.distancia = 999
+        self.intentos_y = 0
         self.esp32 = None
+        self.running = True
+        self.en_emergencia = False  # Nueva variable de estado
+        self.lock = threading.Lock()
+        self.event_ok = threading.Event() # Evento para esperar el 'OK'
+        
+        # Filtro para el sensor ToF
+        self.lecturas_distancia = []
+        self.max_lecturas = 5 # Promedio de 5 muestras para eliminar ruido
+        
         self.conectar()
+        
+        self.lector_thread = threading.Thread(target=self._leer_serial, daemon=True)
+        self.lector_thread.start()
 
     def conectar(self):
         try:
-            self.esp32 = serial.Serial(self.puerto, self.baudios, timeout=1)
-            time.sleep(2)
+            # Abrir puerto con parámetros que evitan el reseteo brusco si es posible
+            self.esp32 = serial.Serial(self.puerto, self.baudios, timeout=0.1)
+            
+            # Forzar un reset limpio para empezar de cero
+            self.esp32.setDTR(False)
+            time.sleep(0.5)
+            self.esp32.setDTR(True)
+            
+            print(f"[BRAZO] Conectado en {self.puerto}. Esperando SYSTEM_READY...")
+            
+            # Limpiar basura acumulada en el puerto de la PC
             self.esp32.reset_input_buffer()
-            print("[BRAZO] Conectado exitosamente.")
+            self.esp32.reset_output_buffer()
+
+            inicio = time.time()
+            ready = False
+            while time.time() - inicio < 5: 
+                if self.esp32.in_waiting > 0:
+                    linea = self.esp32.readline().decode('utf-8', errors='ignore').strip()
+                    if "SYSTEM_READY" in linea:
+                        print("[BRAZO] ESP32 lista y sincronizada.")
+                        ready = True
+                        break
+            
+            if not ready:
+                print("[BRAZO] Advertencia: No se detectó SYSTEM_READY, el inicio podría ser brusco.")
+            
+            # Un pequeño respiro antes del primer comando
+            time.sleep(0.5)
+            self.esp32.reset_input_buffer()
+            
         except Exception as e:
             print(f"[BRAZO] Error de conexión: {e}")
 
-    def mover_a_estado(self, nombre_posicion):
-        """Busca en el diccionario y ejecuta el movimiento."""
-        if nombre_posicion in POSICIONES:
-            print(f"\n--- [BRAZO] Moviendo a: {nombre_posicion} ---")
-            movimientos = POSICIONES[nombre_posicion]
-            
-            # Si regresamos a HOME, priorizamos servos finales por seguridad
-            if nombre_posicion == "HOME":
-                print("[SEGURIDAD] Priorizando servos finales (7, 10, 15)...")
-                finales = [m for m in movimientos if m[0] in [7, 10, 15]]
-                resto = [m for m in movimientos if m[0] not in [7, 10, 15]]
-                
-                # Mover primero muñeca, rotador y pinza
-                if finales:
-                    self.mover_tiempo(finales, forzar=True)
-                # Luego mover base, hombro y codo
-                if resto:
-                    self.mover_tiempo(resto, forzar=True)
-            else:
-                # Movimiento normal para cualquier otra posición
-                self.mover_tiempo(movimientos, forzar=True)
-        else:
-            print(f"[ERROR] Posición {nombre_posicion} no definida.")
+    def _leer_serial(self):
+        buffer = ""
+        while self.running and self.esp32 and self.esp32.is_open:
+            try:
+                if self.esp32.in_waiting > 0:
+                    datos = self.esp32.read(self.esp32.in_waiting).decode('utf-8', errors='ignore')
+                    buffer += datos
+                    if '\n' in buffer:
+                        lineas = buffer.split('\n')
+                        for linea in lineas[:-1]:
+                            linea = linea.strip()
+                            if linea == "OK":
+                                self.event_ok.set()
+                            elif "boton precionado" in linea:
+                                with self.lock:
+                                    self.en_emergencia = True
+                                print("\n" + "!"*50)
+                                print("!!! PARO DE EMERGENCIA DETECTADO !!!")
+                                print("!"*50 + "\n")
+                                # No cerramos el programa, dejamos que ciclo_completo lo maneje
+                            elif "boton liberado" in linea:
+                                with self.lock:
+                                    self.en_emergencia = False
+                                print("[SISTEMA] Botón de emergencia liberado.")
+                            elif linea.startswith("DIST:"):
+                                try:
+                                    nueva_dist = int(linea.split(":")[1])
+                                    # Filtro básico: Ignorar lecturas fuera de rango lógico (0-1200mm)
+                                    if 0 < nueva_dist < 1200:
+                                        with self.lock:
+                                            self.lecturas_distancia.append(nueva_dist)
+                                            if len(self.lecturas_distancia) > self.max_lecturas:
+                                                self.lecturas_distancia.pop(0)
+                                            # Mantener self.distancia como el promedio actual
+                                            self.distancia = sum(self.lecturas_distancia) // len(self.lecturas_distancia)
+                                except: pass
+                        buffer = lineas[-1]
+                time.sleep(0.005)
+            except: break
 
-    def mover_tiempo(self, movimientos, forzar=False):
-        """Envía comandos en bloques de 4 servos y espera confirmación 'OK'."""
-        if not self.esp32 or not self.esp32.is_open:
+    def mover_tiempo(self, movimientos, forzar=False, esperar=True):
+        if not self.esp32 or not self.esp32.is_open: return
+        if self.en_emergencia:
+            print("[BRAZO] Comando ignorado: El sistema está en PARO DE EMERGENCIA.")
             return
 
-        # Filtrar solo los que realmente cambian y asegurar rango 0-180
         necesarios = []
         for p, a in movimientos:
-            # Asegurar que el ángulo esté entre 0 y 180
-            angulo_seguro = max(0, min(180, a))
-            if forzar or self.estado_actual.get(p) != angulo_seguro:
-                necesarios.append((p, angulo_seguro))
+            # Límite extendido para el Pin 13 (Roll), 180 para los demás
+            limite = 270 if p == 13 else 180
+            ang = max(0, min(limite, a))
+            
+            if forzar or self.estado_actual.get(p) != ang:
+                necesarios.append((p, ang))
         
         if not necesarios: return
-
-        # Limpiar basura previa solo una vez al inicio de la ráfaga
-        self.esp32.reset_input_buffer()
-
-        # Enviar de 1 en 1 para máxima fiabilidad en la recepción del ESP32
-        for p, a in necesarios:
-            print(f"   -> Enviando Servo {p} a {a}...", end=" ", flush=True)
-            cadena = f"{p},{a}\n"
+        
+        cadena = "$" + ";".join([f"{p},{a}" for p, a in necesarios]) + "\n"
+        
+        with self.lock:
             try:
+                self.event_ok.clear()
                 self.esp32.write(cadena.encode('utf-8'))
                 self.esp32.flush()
                 
-                # Espera síncrona del OK con mayor margen de tiempo
-                timeout_espera = time.time() + 5.0 
-                confirmado = False
-                while time.time() < timeout_espera:
-                    if self.esp32.in_waiting > 0:
-                        # Leer todo lo disponible y buscar "OK"
-                        respuesta = self.esp32.read(self.esp32.in_waiting).decode('utf-8', errors='ignore')
-                        if "OK" in respuesta.upper():
-                            self.estado_actual[p] = a
-                            confirmado = True
-                            print("OK")
-                            break
-                    time.sleep(0.01)
+                # Actualizar estado local
+                for p, a in necesarios: self.estado_actual[p] = a
                 
-                if not confirmado:
-                    print("TIMEOUT")
-                    print(f"[BRAZO] Advertencia: No se recibió confirmación para servo {p}")
-                
-                # Pequeña pausa para estabilidad eléctrica
-                time.sleep(0.02)
-                
+                # Esperar confirmación para sincronizar movimientos largos
+                if esperar:
+                    if not self.event_ok.wait(timeout=10.0): # Timeout de seguridad más largo
+                        print("[BRAZO] Advertencia: Timeout esperando OK")
             except Exception as e:
-                print(f"ERROR: {e}")
-
-    def cerrar(self):
-        """Cierra la conexión serial de forma segura."""
-        if self.esp32 and self.esp32.is_open:
-            self.esp32.close()
-            print("[BRAZO] Puerto serial cerrado.")
+                print(f"ERROR SERIAL: {e}")
 
     def centrar_ibvs(self, error_x, error_y):
         """Ajuste fino basado en visión (IBVS)."""
         tolerancia = 8
         paso = 1
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
-            return True # Centrado
+            return True
             
         cmds = []
-        # Ajuste X (Horizontal) -> Base (Servo 0)
-        # Si el error es positivo (objeto a la derecha), sumamos para girar a esa dirección
         if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso))
         elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso))
         
-        # Ajuste Y (Vertical) -> Muñeca (Servo 7 - ANTES PIN 4)
-        # Si el error es positivo (objeto abajo), sumamos para bajar la pinza (180 es abajo)
-        if error_y > tolerancia: cmds.append((7, self.estado_actual[7] + paso))
-        elif error_y < -tolerancia: cmds.append((7, self.estado_actual[7] - paso))
+        if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso))
+        elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso))
         
-        if cmds: self.mover_tiempo(cmds)
+        if cmds: self.mover_tiempo(cmds, esperar=False) # No esperamos OK en IBVS para mayor velocidad
         return False
 
     def centrar_proporcional(self, error_x, error_y):
         """Ajuste inteligente basado en un controlador Proporcional."""
         tolerancia = 10
-        kp_x = 0.02  # Ganancia proporcional para X
-        kp_y = 0.02  # Ganancia proporcional para Y
-        max_paso = 3 # Límite de grados por movimiento
+        kp_x = 0.02 
+        kp_y = 0.02  
+        max_paso = 3 
         
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
-            return True # Centrado
+            return True 
             
         cmds = []
         
-        # Ajuste X (Horizontal) -> Base (Servo 0)
-        # Calculamos paso proporcional al error
         paso_x = int(error_x * kp_x)
         if abs(paso_x) > max_paso:
             paso_x = max_paso if paso_x > 0 else -max_paso
-        # Forzamos al menos 1 grado de movimiento si supera la tolerancia
         if paso_x == 0 and abs(error_x) > tolerancia:
             paso_x = 1 if error_x > 0 else -1
 
@@ -152,7 +180,6 @@ class ArmController:
             nuevo_angulo = self.estado_actual[0] + paso_x
             cmds.append((0, nuevo_angulo))
 
-        # Ajuste Y (Vertical) -> Muñeca (Servo 7 - ANTES PIN 4)
         paso_y = int(error_y * kp_y)
         if abs(paso_y) > max_paso:
             paso_y = max_paso if paso_y > 0 else -max_paso
@@ -161,21 +188,36 @@ class ArmController:
 
         if abs(error_y) > tolerancia:
             self.intentos_y += 1
-            nuevo_angulo_7 = self.estado_actual[7] + paso_y
-            cmds.append((7, nuevo_angulo_7))
+            nuevo_angulo_15 = self.estado_actual[15] + paso_y
+            cmds.append((15, nuevo_angulo_15))
             
-            # Si después de 5 intentos el servo 7 no es suficiente, movemos el servo 3 un poquito
             if self.intentos_y >= 5:
-                print(f"[ASISTENCIA] Servo 7 lento, moviendo Servo 3 para ayudar (Error Y: {error_y})")
-                paso_3 = 1 if error_y > 0 else -1
-                nuevo_angulo_3 = self.estado_actual[3] + paso_3
-                cmds.append((3, nuevo_angulo_3))
-                self.intentos_y = 0 # Reiniciamos contador tras la asistencia
+                paso_6 = 1 if error_y > 0 else -1
+                nuevo_angulo_6 = self.estado_actual[6] + paso_6
+                cmds.append((6, nuevo_angulo_6))
+                self.intentos_y = 0 
         else:
             self.intentos_y = 0
             
         if cmds:
-            self.mover_tiempo(cmds)
+            self.mover_tiempo(cmds, esperar=False) # No esperamos OK en centrado proporcional
             
         return False
 
+    def obtener_distancia(self):
+        """Retorna la última distancia leída por el sensor ToF."""
+        return self.distancia
+
+    def mover_a_estado(self, nombre_estado, forzar=False, esperar=False):
+        """Mueve el brazo a una posición predefinida en posiciones.py."""
+        if nombre_estado in POSICIONES:
+            print(f"[BRAZO] Moviendo a estado: {nombre_estado}")
+            self.mover_tiempo(POSICIONES[nombre_estado], forzar=forzar, esperar=esperar)
+        else:
+            print(f"[BRAZO] Error: Estado '{nombre_estado}' no encontrado en posiciones.py")
+
+    def cerrar(self):
+        self.running = False
+        if self.esp32 and self.esp32.is_open:
+            self.esp32.close()
+            print("[BRAZO] Puerto serial cerrado.")
