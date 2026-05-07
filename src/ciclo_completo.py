@@ -44,7 +44,7 @@ load_dotenv()
 # ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-2130')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Rojo" 
+COLOR_OBJETIVO = "Verde" 
 
 from constants.config import OFFSET_X, OFFSET_Y
 
@@ -73,7 +73,7 @@ def main():
     auto_exp = AutoExposureControl(target_brightness=130)
 
     # --- CONFIGURACIÓN DE PARPADEO (Cámara Laptop) ---
-    detector_parpadeo = BlinkDetector(target_blinks=3, window_time=3.0)
+    detector_parpadeo = BlinkDetector(target_blinks=2, window_time=3.0)
 
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
@@ -93,7 +93,7 @@ def main():
     contador_sondeo_color = 0
     fase_sondeo_color = "IZQUIERDA" # Inicia buscando a la izquierda
     
-    print("Sistema listo. Parpadea 3 veces para iniciar el ciclo.")
+    print("Sistema listo. Parpadea 2 veces para iniciar el ciclo.")
 
     try:
         while True:
@@ -126,7 +126,7 @@ def main():
                     detector_parpadeo.start_cam() # Iniciar cámara de laptop en HOME
                     macro_movimiento_hecho = True
                 
-                cv2.putText(frame_vis, "HOME - Parpadea 3 veces", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.putText(frame_vis, "HOME - Parpadea 2 veces", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 # Activar ciclo por parpadeo o tecla 'n'
                 if detector_parpadeo.check_for_trigger() or key == ord('n'):
