@@ -29,7 +29,7 @@ load_dotenv()
 # ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-2130')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Verde" 
+COLOR_OBJETIVO = "Rojo" 
 
 from constants.config import OFFSET_X, OFFSET_Y
 
@@ -72,6 +72,8 @@ def main():
     contador_pastilla_perdida = 0
     recuperacion_pastilla_intentada = False
     contador_sondeo = 0
+    contador_sondeo_color = 0
+    fase_sondeo_color = "IZQUIERDA" # Inicia buscando a la izquierda
     
     print("Presiona 'n' para iniciar el ciclo, 'q' para salir.")
 
@@ -121,10 +123,54 @@ def main():
                 # Ajuste autónomo de luz
                 auto_exp.update(frame, camara)
                 
-                frame_vis, colores = process_color_frame(frame_vis)
+                # Obtener colores y sus centros
+                frame_vis, colores, info_colores = process_color_frame(frame_vis)
+                
                 if COLOR_OBJETIVO in colores:
-                    estado_actual = Estado.RECOLECCION
-                    macro_movimiento_hecho = False
+                    # Lógica de centrado hacia el color antes de entrar en RECOLECCION
+                    cx, cy = info_colores[COLOR_OBJETIVO]
+                    ex = cx - (frame_vis.shape[1] // 2)
+                    ey = cy - (frame_vis.shape[0] // 2)
+                    
+                    if abs(ex) <= 20 and abs(ey) <= 20:
+                        print(f"[CONTROL] Color {COLOR_OBJETIVO} centrado. Pasando a RECOLECCION.")
+                        estado_actual = Estado.RECOLECCION
+                        macro_movimiento_hecho = False
+                        contador_sondeo_color = 0
+                    else:
+                        # Centrado suave
+                        targets = {}
+                        if abs(ex) > 20:
+                            targets[0] = brazo.estado_actual[0] + (1 if ex > 0 else -1)
+                        if abs(ey) > 20:
+                            targets[15] = brazo.estado_actual[15] + (1 if ey > 0 else -1)
+                        
+                        if targets:
+                            brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                else:
+                    # LÓGICA DE SONDEO SECUENCIAL (Izquierda -> Derecha)
+                    cv2.putText(frame_vis, f"Sondeando {COLOR_OBJETIVO} ({fase_sondeo_color})...", (10, 60), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    
+                    if fase_sondeo_color == "IZQUIERDA":
+                        # Mover hacia la izquierda hasta el límite (140 grados)
+                        if brazo.estado_actual[0] < 140:
+                            nuevo_s0 = brazo.estado_actual[0] + 1
+                            brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
+                        else:
+                            # Límite izquierdo alcanzado, cambiar a derecha
+                            print("[SONDEO] Límite izquierdo alcanzado. Cambiando a derecha.")
+                            fase_sondeo_color = "DERECHA"
+                    
+                    elif fase_sondeo_color == "DERECHA":
+                        # Mover hacia la derecha hasta el límite (40 grados)
+                        if brazo.estado_actual[0] > 40:
+                            nuevo_s0 = brazo.estado_actual[0] - 1
+                            brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
+                        else:
+                            # Límite derecho alcanzado, reiniciar a izquierda
+                            print("[SONDEO] Límite derecho alcanzado. Reiniciando sondeo.")
+                            fase_sondeo_color = "IZQUIERDA"
 
             elif estado_actual == Estado.RECOLECCION:
                 # Ajuste autónomo constante durante la recolección
@@ -137,9 +183,9 @@ def main():
                     targets = {} 
                     
                     if not lockon_activado:
-                        # Centrado Horizontal (S0)
-                        if abs(ex) > 8:
-                            paso_x = 2 if abs(ex) > 60 else 1
+                        # Centrado Horizontal (S0) - Usamos paso de 1 grado para máxima precisión
+                        if abs(ex) > TOLERANCIA_CENTRADO:
+                            paso_x = 1 
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
                         # Centrado Vertical Inteligente (S15 + S6)
