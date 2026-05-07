@@ -18,6 +18,7 @@ from modules.pastillas_detector import (
 )
 from modules.detectarColor import process_color_frame
 from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, finalizar_deteccion
+from modules.auto_exposure import AutoExposureControl
 from constants.posiciones import POSICIONES
 
 # Cargar variables de entorno
@@ -26,7 +27,7 @@ load_dotenv()
 # ===============================================================
 # --- CONFIGURACIÓN PRINCIPAL ---
 # ===============================================================
-PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
+PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-2130')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
 COLOR_OBJETIVO = "Verde" 
 
@@ -54,13 +55,15 @@ def main():
         print(f"[ERROR] No se pudo inicializar el hardware: {e}")
         return
 
+    auto_exp = AutoExposureControl(target_brightness=130)
+
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
     
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
     Z_UMBRAL_LOCKON = 115    
     Z_LIMITE_FINAL = 75      
-    Z_LIMITE_ENTREGA = 200
+    Z_LIMITE_ENTREGA = 220
     TOLERANCIA_CENTRADO = 12 
     lockon_activado = False  
     lockon_activado_boca = False
@@ -77,9 +80,12 @@ def main():
             frame = camara.get_frame()
             if frame is None: continue
 
+            # Actualizar z_coord al inicio
+            dist_actual = brazo.obtener_distancia()
+            z_coord = dist_actual
+
             frame_vis = frame.copy()
             
-            dist_actual = brazo.obtener_distancia() 
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'): break
 
@@ -107,10 +113,13 @@ def main():
 
             elif estado_actual == Estado.OBSERVACION:
                 if not macro_movimiento_hecho:
-                    iniciar_deteccion_pastillas(camara) # Luz 48
+                    iniciar_deteccion_pastillas(camara) # Luz inicial
                     brazo.mover_a_estado("OBSERVACION")
                     time.sleep(2) 
                     macro_movimiento_hecho = True
+                
+                # Ajuste autónomo de luz
+                auto_exp.update(frame, camara)
                 
                 frame_vis, colores = process_color_frame(frame_vis)
                 if COLOR_OBJETIVO in colores:
@@ -118,7 +127,10 @@ def main():
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.RECOLECCION:
-                frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower(), dist_actual=dist_actual)
+                # Ajuste autónomo constante durante la recolección
+                auto_exp.update(frame, camara)
+                
+                frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
                 
                 if info or lockon_activado:
                     ex, ey, area = info if info else (0, 0, 0)
@@ -177,7 +189,7 @@ def main():
                         # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
                         # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
                         FINAL_CORRECTION_S0 = -2  # Grados extra para centrar X
-                        FINAL_CORRECTION_S15 = 1 # Grados extra para centrar Y (hacia arriba)
+                        FINAL_CORRECTION_S15 = 0 # Grados extra para centrar Y (hacia arriba)
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
                         brazo.mover_tiempo([
@@ -229,13 +241,15 @@ def main():
                 if not macro_movimiento_hecho:
                     print("[CONTROL] Yendo a posición de entrega (Maniquí)...")
                     iniciar_deteccion(camara)
-                    camara.set_led_brightness(255) 
                     # Forzar movimiento completo con espera
                     brazo.mover_a_estado("OBSERVACION_MANIQUI", forzar=True, esperar=True)
                     time.sleep(0.5)
                     macro_movimiento_hecho = True
                     lockon_activado_boca = False
                 
+                # Ajuste autónomo de luz para la boca
+                auto_exp.update(frame, camara)
+
                 # Rotar frame para el maniquí
                 frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
                 frame_vis = frame_rotated.copy()
@@ -252,6 +266,9 @@ def main():
                     cv2.putText(frame_vis, "Buscando boca (Frame Rotado)...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
             elif estado_actual == Estado.SEGUIMIENTO_BOCA:
+                # Ajuste autónomo continuo para la boca
+                auto_exp.update(frame, camara)
+
                 # Rotar frame para el maniquí
                 frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
                 frame_vis = frame_rotated.copy()

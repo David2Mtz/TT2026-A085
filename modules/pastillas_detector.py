@@ -4,8 +4,8 @@ import numpy as np
 from constants.config import OFFSET_X, OFFSET_Y
 
 def get_hsv_ranges(color_name):
-    min_saturation = 70
-    min_value = 60
+    min_saturation = 45
+    min_value = 35
     ranges = {}
     
     lower_red1 = np.array([0, min_saturation, min_value])
@@ -14,12 +14,12 @@ def get_hsv_ranges(color_name):
     upper_red2 = np.array([180, 255, 255])
     ranges['rojo'] = ((lower_red1, upper_red1), (lower_red2, upper_red2))
 
-    lower_green = np.array([40, min_saturation, min_value])
-    upper_green = np.array([85, 255, 255])
+    lower_green = np.array([35, min_saturation, min_value])
+    upper_green = np.array([90, 255, 255])
     ranges['verde'] = ((lower_green, upper_green),)
 
-    lower_blue = np.array([95, min_saturation, min_value])
-    upper_blue = np.array([135, 255, 255])
+    lower_blue = np.array([90, min_saturation, min_value])
+    upper_blue = np.array([140, 255, 255])
     ranges['azul'] = ((lower_blue, upper_blue),)
     
     return ranges.get(color_name.lower())
@@ -46,55 +46,57 @@ def find_base(hsv_frame, base_color_name):
         
     return largest_contour, base_color_mask
 
-def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSET_X, dist_actual=999):
-    """
-    Lógica de detección de pastillas por sustracción con filtro de reflejos.
-    """
+def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSET_X):
     alto, ancho = frame.shape[:2]
-    cx_pantalla, cy_pantalla = (ancho // 2) + offset_x, (alto // 2) + offset_y
-    
-    hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    cx_p, cy_p = (ancho // 2) + offset_x, (alto // 2) + offset_y
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     error_tracking = None
 
-    # --- DIBUJAR REFERENCIA DE PINZA (AZUL) ---
-    cv2.circle(frame, (cx_pantalla, cy_pantalla), 8, (255, 0, 0), -1)
-
-    base_contour, base_color_mask = find_base(hsv_frame, color_base)
+    # 1. Detectar Base
+    ranges = get_hsv_ranges(color_base)
+    if not ranges: return frame, None
     
-    if base_contour is not None:
-        cv2.drawContours(frame, [base_contour], -1, (0, 255, 0), 2)
+    mask_base = cv2.inRange(hsv, ranges[0][0], ranges[0][1])
+    if len(ranges) > 1: mask_base = cv2.add(mask_base, cv2.inRange(hsv, ranges[1][0], ranges[1][1]))
+    
+    # 2. Refinar máscara de base (eliminar ruido)
+    kernel = np.ones((5, 5), np.uint8)
+    mask_base = cv2.morphologyEx(mask_base, cv2.MORPH_OPEN, kernel)
+    
+    # 3. Identificar objetos sobre la base (sustracción)
+    # Creamos un área de interés (el contorno más grande de la base)
+    cnts_base, _ = cv2.findContours(mask_base, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if cnts_base:
+        base_cnt = max(cnts_base, key=cv2.contourArea)
+        roi_mask = np.zeros_like(mask_base)
+        cv2.drawContours(roi_mask, [base_cnt], -1, 255, -1)
         
-        moi_mask = np.zeros(hsv_frame.shape[:2], dtype="uint8")
-        cv2.drawContours(moi_mask, [base_contour], -1, 255, -1) 
-        pills_mask = cv2.subtract(moi_mask, base_color_mask)
-        
-        # FILTRO DE REFLEJOS
-        _, s_plane, v_plane = cv2.split(hsv_frame)
-        reflejos = cv2.bitwise_and(
-            cv2.threshold(s_plane, 70, 255, cv2.THRESH_BINARY_INV)[1],
-            cv2.threshold(v_plane, 200, 255, cv2.THRESH_BINARY)[1]
-        )
-        pills_mask = cv2.subtract(pills_mask, reflejos)
+        # Lo que está en la ROI pero NO es el color de la base es una pastilla/sombra
+        pills_mask = cv2.subtract(roi_mask, mask_base)
+        pills_mask = cv2.morphologyEx(pills_mask, cv2.MORPH_OPEN, kernel)
 
-        kernel = np.ones((5, 5), np.uint8)
-        pills_mask = cv2.morphologyEx(pills_mask, cv2.MORPH_OPEN, kernel, iterations=2)
-        pills_mask = cv2.morphologyEx(pills_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
-        
-        contours, _ = cv2.findContours(pills_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # 4. Filtrar por Circularidad (Evita sombras irregulares)
+        cnts_pills, _ = cv2.findContours(pills_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        valid_pills = []
+        for c in cnts_pills:
+            area = cv2.contourArea(c)
+            perimetro = cv2.arcLength(c, True)
+            if perimetro == 0 or area < 100: continue
+            
+            circularidad = (4 * np.pi * area) / (perimetro ** 2)
+            if circularidad > 0.65: # Umbral para comprimidos circulares
+                valid_pills.append(c)
 
-        if contours:
-            pill_contours = [c for c in contours if cv2.contourArea(c) > 150]
-            if pill_contours:
-                selected_pill = max(pill_contours, key=cv2.contourArea)
-                M = cv2.moments(selected_pill)
-                if M["m00"] != 0:
-                    cx_p, cy_p = int(M["m10"] / M["m00"]), int(M["m01"] / M["m00"])
-                    error_tracking = (cx_p - cx_pantalla, cy_p - cy_pantalla, cv2.contourArea(selected_pill))
-                    
-                    cv2.drawContours(frame, [selected_pill], -1, (0, 0, 255), 2)
-                    cv2.circle(frame, (cx_p, cy_p), 5, (0, 0, 255), -1)
-                    cv2.line(frame, (cx_pantalla, cy_pantalla), (cx_p, cy_p), (0, 255, 255), 2)
+        if valid_pills:
+            best_pill = max(valid_pills, key=cv2.contourArea)
+            M = cv2.moments(best_pill)
+            if M["m00"] != 0:
+                px, py = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
+                error_tracking = (px - cx_p, py - cy_p, cv2.contourArea(best_pill))
+                cv2.drawContours(frame, [best_pill], -1, (0, 0, 255), 2)
+                cv2.circle(frame, (px, py), 5, (0, 0, 255), -1)
 
+    cv2.circle(frame, (cx_p, cy_p), 8, (255, 0, 0), -1)
     return frame, error_tracking
 
 def iniciar_deteccion(camara):

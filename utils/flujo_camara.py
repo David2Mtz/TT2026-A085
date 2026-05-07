@@ -30,6 +30,13 @@ class CameraSerial:
         except Exception as e:
             print(f"Error crítico al abrir el puerto de cámara: {e}")
             self.ser = None
+            
+    def set_exposure(self, value):
+        """ Envía el comando 'E' seguido de 2 bytes (Big Endian) """
+        if self.ser and self.ser.is_open:
+            val = max(0, min(1200, int(value)))
+            self.ser.write(b'E' + struct.pack('>H', val))
+            self.ser.flush()
 
     def get_frame(self, max_intentos=3):
         if not self.ser:
