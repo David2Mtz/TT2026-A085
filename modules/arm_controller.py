@@ -14,12 +14,18 @@ class ArmController:
         # Estado inicial sincronizado con el firmware
         self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 13: 0, 12: 90}
         self.distancia = 999
+        self.mag1 = [0.0, 0.0, 0.0]
+        self.mag2 = [0.0, 0.0, 0.0]
         self.intentos_y = 0
         self.esp32 = None
         self.running = True
         self.en_emergencia = False  # Nueva variable de estado
         self.lock = threading.Lock()
         self.event_ok = threading.Event() # Evento para esperar el 'OK'
+        
+        # Estado de la pinza
+        self.estado_pinza = "DESCONOCIDO" # "ABIERTA", "VACIA", "CON_OBJETO"
+        self.sujetando_objetivo = False # Mantener por compatibilidad
         
         # Filtro para el sensor ToF
         self.lecturas_distancia = []
@@ -101,6 +107,25 @@ class ArmController:
                                                 self.lecturas_distancia.pop(0)
                                             # Mantener self.distancia como el promedio actual
                                             self.distancia = sum(self.lecturas_distancia) // len(self.lecturas_distancia)
+                                except: pass
+                            elif linea.startswith("MAG1:"):
+                                try:
+                                    vals = [float(x) for x in linea.split(":")[1].split(",")]
+                                    self.mag1 = vals
+                                    
+                                    with self.lock:
+                                        # 1. ¿Está abierta o cerrada? (Umbral X = 451)
+                                        if vals[0] < 451:
+                                            self.estado_pinza = "ABIERTA"
+                                            self.sujetando_objetivo = False
+                                        else:
+                                            # 2. Si está cerrada, ¿tiene algo? (Umbral Y = 26.5)
+                                            if vals[1] > 26.5:
+                                                self.estado_pinza = "CON_OBJETO"
+                                                self.sujetando_objetivo = True
+                                            else:
+                                                self.estado_pinza = "VACIA"
+                                                self.sujetando_objetivo = False
                                 except: pass
                         buffer = lineas[-1]
                 time.sleep(0.005)

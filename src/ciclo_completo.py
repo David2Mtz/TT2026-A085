@@ -42,7 +42,7 @@ load_dotenv()
 # ===============================================================
 # --- CONFIGURACIÓN PRINCIPAL ---
 # ===============================================================
-PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-2130')
+PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
 COLOR_OBJETIVO = "Verde" 
 
@@ -114,6 +114,15 @@ def main():
                 print("[SISTEMA] Entrando en modo EMERGENCIA...")
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
+
+            # --- DETECCIÓN DE PÉRDIDA DE OBJETO (Seguridad) ---
+            if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ESPERA_CONFIRMACION_ENTREGA]:
+                if brazo.estado_pinza == "VACIA":
+                    print("\n" + "!"*50)
+                    print("!!! ALERTA: OBJETO PERDIDO DURANTE TRANSPORTE !!!")
+                    print("!"*50 + "\n")
+                    estado_actual = Estado.HOME
+                    macro_movimiento_hecho = False
             
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
@@ -175,9 +184,9 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     
                     if fase_sondeo_color == "IZQUIERDA":
-                        # Mover hacia la izquierda hasta el límite (140 grados)
-                        if brazo.estado_actual[0] < 140:
-                            nuevo_s0 = brazo.estado_actual[0] + 1
+                        # Mover hacia la izquierda (decrementando para llegar a 40)
+                        if brazo.estado_actual[0] > 40:
+                            nuevo_s0 = brazo.estado_actual[0] - 1
                             brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
                         else:
                             # Límite izquierdo alcanzado, cambiar a derecha
@@ -185,9 +194,9 @@ def main():
                             fase_sondeo_color = "DERECHA"
                     
                     elif fase_sondeo_color == "DERECHA":
-                        # Mover hacia la derecha hasta el límite (40 grados)
-                        if brazo.estado_actual[0] > 40:
-                            nuevo_s0 = brazo.estado_actual[0] - 1
+                        # Mover hacia la derecha (incrementando para llegar a 140)
+                        if brazo.estado_actual[0] < 140:
+                            nuevo_s0 = brazo.estado_actual[0] + 1
                             brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
                         else:
                             # Límite derecho alcanzado, reiniciar a izquierda
@@ -298,11 +307,18 @@ def main():
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
                 cv2.putText(frame_vis, "CONFIRMAR - Presiona 'c'", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 if key == ord('c'):
-                    print("[CONTROL] Agarre confirmado. Levantando...")
+                    print("[CONTROL] Agarre confirmado. Cerrando pinza...")
                     brazo.mover_tiempo([(12, 10)], esperar=True) 
-                    time.sleep(0.5)
-                    brazo.mover_a_estado("PRE_RECOLECCION", esperar=True) 
-                    estado_actual = Estado.OBSERVACION_MANIQUI
+                    time.sleep(1.0) # Dar tiempo para que el magnetómetro estabilice la lectura
+                    
+                    if brazo.estado_pinza == "CON_OBJETO":
+                        print("[CONTROL] Objeto detectado. Levantando...")
+                        brazo.mover_a_estado("PRE_RECOLECCION", esperar=True) 
+                        estado_actual = Estado.OBSERVACION_MANIQUI
+                    else:
+                        print("[ALERTA] Falló el agarre (Pinza Vacía). Regresando a observación.")
+                        brazo.mover_tiempo([(12, 90)], esperar=True) # Abrir pinza
+                        estado_actual = Estado.OBSERVACION
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
@@ -458,6 +474,19 @@ def main():
             umbral_actual = Z_LIMITE_ENTREGA if "BOCA" in estado_actual or "ENTREGA" in estado_actual or "MANIQUI" in estado_actual else Z_LIMITE_FINAL
             color_z = (0, 255, 0) if z_coord <= umbral_actual else (0, 255, 255)
             cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
+            
+            # --- VISUALIZACIÓN DE MAGNETÓMETRO (Solo M1 - Inferior Derecha) ---
+            m1 = brazo.mag1
+            est_p = brazo.estado_pinza
+            # Colores: Verde para objeto, Amarillo para abierta, Rojo para vacía
+            col_p = (0, 255, 0) if est_p == "CON_OBJETO" else (0, 255, 255) if est_p == "ABIERTA" else (0, 0, 255)
+            
+            texto_mag = f"M1: X:{m1[0]:.0f} Y:{m1[1]:.0f} Z:{m1[2]:.0f} | PINZA: {est_p}"
+            (t_w, t_h), _ = cv2.getTextSize(texto_mag, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            pos_x_mag = frame_vis.shape[1] - t_w - 10
+            pos_y_mag = frame_vis.shape[0] - 20
+            cv2.putText(frame_vis, texto_mag, (pos_x_mag, pos_y_mag), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, col_p, 1)
             
             cv2.putText(frame_vis, f"ESTADO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
