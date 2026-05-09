@@ -30,7 +30,7 @@ class BlinkDetector:
             # Bajar resolución de hardware para ganar FPS (Mac/Laptop)
             self.cam.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
             self.cam.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-            self.cam.set(cv2.CAP_PROP_FPS, 15)
+            self.cam.set(cv2.CAP_PROP_FPS, 24)
         return self.cam.isOpened()
 
     def stop_cam(self):

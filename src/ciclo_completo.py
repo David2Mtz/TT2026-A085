@@ -80,8 +80,8 @@ def main():
     
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
     Z_UMBRAL_LOCKON = 115    
-    Z_LIMITE_FINAL = 75      
-    Z_LIMITE_ENTREGA = 220
+    Z_LIMITE_FINAL = 78      
+    Z_LIMITE_ENTREGA = 250
     TOLERANCIA_CENTRADO = 12 
     lockon_activado = False  
     lockon_activado_boca = False
@@ -170,29 +170,29 @@ def main():
                         if targets:
                             brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
                 else:
-                    # LÓGICA DE SONDEO SECUENCIAL (Izquierda -> Derecha)
+                    # LÓGICA DE SONDEO SECUENCIAL (derecha -> izquierda)
                     cv2.putText(frame_vis, f"Sondeando {COLOR_OBJETIVO} ({fase_sondeo_color})...", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     
-                    if fase_sondeo_color == "IZQUIERDA":
-                        # Mover hacia la izquierda hasta el límite (140 grados)
+                    if fase_sondeo_color == "DERECHA":
+                        # Mover hacia la derecha hasta el límite (140 grados)
                         if brazo.estado_actual[0] < 140:
                             nuevo_s0 = brazo.estado_actual[0] + 1
                             brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
                         else:
                             # Límite izquierdo alcanzado, cambiar a derecha
-                            print("[SONDEO] Límite izquierdo alcanzado. Cambiando a derecha.")
-                            fase_sondeo_color = "DERECHA"
+                            print("[SONDEO] Límite derecho alcanzado. Cambiando a izquierda.")
+                            fase_sondeo_color = "IZQUIERDA"
                     
-                    elif fase_sondeo_color == "DERECHA":
-                        # Mover hacia la derecha hasta el límite (40 grados)
+                    elif fase_sondeo_color == "IZQUIERDA":
+                        # Mover hacia la izquierda hasta el límite (40 grados)
                         if brazo.estado_actual[0] > 40:
                             nuevo_s0 = brazo.estado_actual[0] - 1
                             brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
                         else:
                             # Límite derecho alcanzado, reiniciar a izquierda
-                            print("[SONDEO] Límite derecho alcanzado. Reiniciando sondeo.")
-                            fase_sondeo_color = "IZQUIERDA"
+                            print("[SONDEO] Límite izquierdo alcanzado. Reiniciando sondeo.")
+                            fase_sondeo_color = "DERECHA"
 
             elif estado_actual == Estado.RECOLECCION:
                 # Ajuste autónomo constante durante la recolección
