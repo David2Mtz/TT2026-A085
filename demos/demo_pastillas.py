@@ -11,6 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
 from modules.pastillas_detector import process_pastillas_frame, iniciar_deteccion, finalizar_deteccion
+from modules.auto_exposure import AutoExposureControl
 
 # Cargar variables de entorno
 load_dotenv()
@@ -25,7 +26,7 @@ def main():
     # Configuración de puertos
     puerto_camara = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-2110')
     puerto_brazo = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-    color_objetivo = "azul"
+    color_objetivo = "Verde"
 
     # 1. Inicialización del Brazo primero
     try:
@@ -53,6 +54,12 @@ def main():
         return
 
     objetivo_centrado = False
+    auto_exp = AutoExposureControl(target_brightness=130, threshold=20)
+
+    # Si la pastilla es roja, limitamos la exposición a 450 para evitar "lavado" de color
+    if color_objetivo.lower() == "rojo":
+        print("[INFO] Pastilla roja detectada. Limitando exposición máxima a 450.")
+        auto_exp.set_max_exposure(450)
 
     try:
         while True:
@@ -60,7 +67,14 @@ def main():
             if frame is None:
                 continue
 
+            # Control automático de exposición
+            auto_exp.update(frame, camara)
+
+            alto, ancho = frame.shape[:2]
             frame_vis = frame.copy()
+            # Mostrar valores de exposición en el frame
+            cv2.putText(frame_vis, f"LED: {auto_exp.current_led} | EXP: {auto_exp.current_exp}", (10, alto - 20), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             if not objetivo_centrado:
                 # 3. Procesar búsqueda de pastilla
