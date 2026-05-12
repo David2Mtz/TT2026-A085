@@ -73,7 +73,10 @@ def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSE
         
         # Lo que está en la ROI pero NO es el color de la base es una pastilla/sombra
         pills_mask = cv2.subtract(roi_mask, mask_base)
+        
+        # Refinar máscara de pastillas
         pills_mask = cv2.morphologyEx(pills_mask, cv2.MORPH_OPEN, kernel)
+        pills_mask = cv2.morphologyEx(pills_mask, cv2.MORPH_DILATE, kernel)
 
         # 4. Filtrar por Circularidad (Evita sombras irregulares)
         cnts_pills, _ = cv2.findContours(pills_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -81,10 +84,10 @@ def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSE
         for c in cnts_pills:
             area = cv2.contourArea(c)
             perimetro = cv2.arcLength(c, True)
-            if perimetro == 0 or area < 100: continue
+            if perimetro == 0 or area < 80: continue # Bajamos un poco el área mínima
             
             circularidad = (4 * np.pi * area) / (perimetro ** 2)
-            if circularidad > 0.65: # Umbral para comprimidos circulares
+            if circularidad > 0.50: # Umbral relajado para comprimidos (antes 0.65)
                 valid_pills.append(c)
 
         if valid_pills:

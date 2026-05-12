@@ -12,13 +12,13 @@ class AutoExposureControl:
         
         # Límites conocidos
         self.min_led = 0
-        self.max_led = 160
+        self.max_led = 100
         self.min_exp = 100
-        self.max_exp = 850
+        self.max_exp = 900
         
         # Estado actual
-        self.current_led = 60
-        self.current_exp = 300
+        self.current_led = 48
+        self.current_exp = 500
         self.last_adjustment_time = 0
         self.adjustment_cooldown = 0.5 # Segundos entre ajustes para dejar estabilizar
 

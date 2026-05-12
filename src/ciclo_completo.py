@@ -79,8 +79,8 @@ def main():
     macro_movimiento_hecho = False
     
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
-    Z_UMBRAL_LOCKON = 115    
-    Z_LIMITE_FINAL = 78      
+    Z_UMBRAL_LOCKON = 120    
+    Z_LIMITE_FINAL = 98   
     Z_LIMITE_ENTREGA = 250
     TOLERANCIA_CENTRADO = 12 
     lockon_activado = False  
@@ -158,26 +158,10 @@ def main():
                 frame_vis, colores, info_colores = process_color_frame(frame_vis)
                 
                 if COLOR_OBJETIVO in colores:
-                    # Lógica de centrado hacia el color antes de entrar en RECOLECCION
-                    cx, cy = info_colores[COLOR_OBJETIVO]
-                    ex = cx - (frame_vis.shape[1] // 2)
-                    ey = cy - (frame_vis.shape[0] // 2)
-                    
-                    if abs(ex) <= 20 and abs(ey) <= 20:
-                        print(f"[CONTROL] Color {COLOR_OBJETIVO} centrado. Pasando a RECOLECCION.")
-                        estado_actual = Estado.RECOLECCION
-                        macro_movimiento_hecho = False
-                        contador_sondeo_color = 0
-                    else:
-                        # Centrado suave
-                        targets = {}
-                        if abs(ex) > 20:
-                            targets[0] = brazo.estado_actual[0] + (1 if ex > 0 else -1)
-                        if abs(ey) > 20:
-                            targets[15] = brazo.estado_actual[15] + (1 if ey > 0 else -1)
-                        
-                        if targets:
-                            brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                    print(f"[CONTROL] Color {COLOR_OBJETIVO} detectado. Iniciando segmentación de pastilla...")
+                    estado_actual = Estado.RECOLECCION
+                    macro_movimiento_hecho = False
+                    contador_sondeo_color = 0
                 else:
                     # LÓGICA DE SONDEO SECUENCIAL (derecha -> izquierda)
                     cv2.putText(frame_vis, f"Sondeando {COLOR_OBJETIVO} ({fase_sondeo_color})...", (10, 60), 
@@ -207,19 +191,24 @@ def main():
                 # Ajuste autónomo constante durante la recolección
                 auto_exp.update(frame, camara)
                 
+                # Intentar segmentación fina de la pastilla
                 frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
+                
+                # Obtener detección de color como respaldo
+                _, colores_backup, info_colores_backup = process_color_frame(frame.copy())
                 
                 if info or lockon_activado:
                     ex, ey, area = info if info else (0, 0, 0)
                     targets = {} 
                     
                     if not lockon_activado:
-                        # Centrado Horizontal (S0) - Usamos paso de 1 grado para máxima precisión
+                        # --- PRIORIDAD X (Eje S0) ---
                         if abs(ex) > TOLERANCIA_CENTRADO:
-                            paso_x = 1 
+                            # Paso agresivo si el error es grande (>40px)
+                            paso_x = 1 if abs(ex) > 10 else 0.5
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
-                        # Centrado Vertical Inteligente (S15 + S6)
+                        # --- EJE Y (S15 + S6) ---
                         angulo_15 = brazo.estado_actual[15]
                         angulo_6 = brazo.estado_actual[6]
                         if abs(ey) > 10:
@@ -285,6 +274,25 @@ def main():
                     # Resetear contadores si hay detección o lock-on
                     contador_pastilla_perdida = 0
                     recuperacion_pastilla_intentada = False
+                
+                elif COLOR_OBJETIVO in colores_backup:
+                    # RESPALDO: Si no hay segmentación fina pero sí vemos el color
+                    cx, cy = info_colores_backup[COLOR_OBJETIVO]
+                    ex_b = cx - (frame_vis.shape[1] // 2)
+                    ey_b = cy - (frame_vis.shape[0] // 2)
+                    
+                    targets = {}
+                    # Movimiento suave hacia el color detectado
+                    if abs(ex_b) > 20:
+                        targets[0] = brazo.estado_actual[0] + (1 if ex_b > 0 else -1)
+                    if abs(ey_b) > 20:
+                        targets[15] = brazo.estado_actual[15] + (1 if ey_b > 0 else -1)
+                    
+                    if targets:
+                        brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                    
+                    cv2.putText(frame_vis, f"Aproximando a {COLOR_OBJETIVO}...", (10, 60), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 else:
                     # LÓGICA DE RECUPERACIÓN (Si perdemos la pastilla)
@@ -484,7 +492,7 @@ def main():
             texto_mag = f"M1: X:{m1[0]:.0f} Y:{m1[1]:.0f} Z:{m1[2]:.0f} | PINZA: {est_p}"
             (t_w, t_h), _ = cv2.getTextSize(texto_mag, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
             pos_x_mag = frame_vis.shape[1] - t_w - 10
-            pos_y_mag = frame_vis.shape[0] - 20
+            pos_y_mag = frame_vis.shape[0] - 50 # Subido para no chocar con ESTADO
             cv2.putText(frame_vis, texto_mag, (pos_x_mag, pos_y_mag), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, col_p, 1)
             

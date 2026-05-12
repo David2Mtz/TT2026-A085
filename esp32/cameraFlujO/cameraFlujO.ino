@@ -60,10 +60,10 @@ void setup() {
   s = esp_camera_sensor_get();
   // Bloqueo de controles automáticos para visión artificial estable
   s->set_gain_ctrl(s, 0);      // 0 = Ganancia manual
-  s->set_agc_gain(s, 0);       // Ganancia al mínimo (0-30)
+  s->set_agc_gain(s, 1);       // Ganancia al mínimo (0-30)
   s->set_exposure_ctrl(s, 0);       // 0 = Exposición manual (CRÍTICO)
   
-  s->set_aec_value(s, 300);      // Valor inicial estándar
+  s->set_aec_value(s, 500);      // Valor inicial estándar
   
   s->set_sharpness(s, 2);
 

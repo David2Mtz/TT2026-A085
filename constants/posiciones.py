@@ -19,7 +19,7 @@ POSICIONES = {
         (0, 90),   # Base (Frente)
         (6, 60),  # Codo flexionado para apuntar la cámara
         (1, 70),  # Hombro inclinado sobre la mesa
-        (15, 170), # Muñeca (Pitch) apuntando hacia abajo (ANTES PIN 4)
+        (15, 130), # Muñeca (Pitch) apuntando hacia abajo (ANTES PIN 4)
         (13, 0),  # Rotador (Roll) nivelado (ANTES PIN 5)
         (12, 90)   # Pinza abierta
     ],

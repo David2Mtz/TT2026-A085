@@ -166,19 +166,18 @@ class ArmController:
             except Exception as e:
                 print(f"ERROR SERIAL: {e}")
 
-    def centrar_ibvs(self, error_x, error_y):
+    def centrar_ibvs(self, error_x, error_y, paso_x=1, paso_y=1):
         """Ajuste fino basado en visión (IBVS)."""
         tolerancia = 8
-        paso = 1
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
             return True
             
         cmds = []
-        if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso))
-        elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso))
+        if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso_x))
+        elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso_x))
         
-        if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso))
-        elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso))
+        if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso_y))
+        elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso_y))
         
         if cmds: self.mover_tiempo(cmds, esperar=False) # No esperamos OK en IBVS para mayor velocidad
         return False
@@ -186,9 +185,9 @@ class ArmController:
     def centrar_proporcional(self, error_x, error_y):
         """Ajuste inteligente basado en un controlador Proporcional."""
         tolerancia = 10
-        kp_x = 0.02 
+        kp_x = 0.03 # Aumentado levemente
         kp_y = 0.02  
-        max_paso = 3 
+        max_paso = 4 # Aumentado de 3 a 4
         
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
             return True 
