@@ -12,7 +12,7 @@ class ArmController:
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial sincronizado con el firmware
-        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 8: 0, 12: 90}
+        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 8: 0, 12: 80}
         self.distancia = 999
         self.mag1 = [0.0, 0.0, 0.0]
         self.mag2 = [0.0, 0.0, 0.0]
@@ -111,18 +111,25 @@ class ArmController:
                             elif linea.startswith("MAG1:"):
                                 try:
                                     vals = [float(x) for x in linea.split(":")[1].split(",")]
-                                    self.mag1 = vals
                                     
                                     with self.lock:
-                                        # 1. ¿Está abierta o cerrada? (Umbral X = 451)
-                                        # Basado en tu lectura X=457, el umbral 451 es correcto.
-                                        if vals[0] < 451:
+                                        self.mag1 = vals
+                                        
+                                        # PRIORIDAD: Verificar el ángulo del servo de la pinza (Pin 12)
+                                        # Si la pinza está abierta (>= 80), no puede estar "CON_OBJETO"
+                                        angulo_pinza = self.estado_actual.get(12, 80)
+                                        
+                                        if angulo_pinza >= 80:
                                             self.estado_pinza = "ABIERTA"
                                             self.sujetando_objetivo = False
                                         else:
-                                            # 2. Si está cerrada, ¿tiene algo?
-                                            # Bajamos el umbral de Y de 26.5 a 10.0 para debuggear.
-                                            if vals[1] > 10.0:
+                                            # Solo evaluamos magnetómetro si la pinza está en posición de cierre (< 80)
+                                            # LÓGICA BASADA EN EXPERIMENTOS (13 Mayo 2026):
+                                            # El eje Z es el más sensible al "aplastamiento" del objeto.
+                                            # VACIO_CERRADO: Z ~ 1020
+                                            # CON_OBJETO / HOLDING: Z ~ 925 a 965
+                                            # UMBRAL FLEXIBLE Z: 980
+                                            if vals[2] < 980: 
                                                 self.estado_pinza = "CON_OBJETO"
                                                 self.sujetando_objetivo = True
                                             else:

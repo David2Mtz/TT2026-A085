@@ -35,6 +35,7 @@ from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, final
 from modules.auto_exposure import AutoExposureControl
 from modules.blinkDetector import BlinkDetector
 from constants.posiciones import POSICIONES
+from modules.mag_logger import log_mag_data, ask_user_success # Importar logger
 
 # Cargar variables de entorno
 load_dotenv()
@@ -48,7 +49,7 @@ COLOR_OBJETIVO = "Azul"
 
 from constants.config import OFFSET_X, OFFSET_Y
 
-from modules.mag_logger import log_mag_data, ask_user_success
+from constants.config import OFFSET_X, OFFSET_Y
 
 class Estado:
     HOME = "HOME"
@@ -63,7 +64,7 @@ class Estado:
     EMERGENCIA = "EMERGENCIA"
 
 def main():
-    print("--- INICIANDO CICLO COMPLETO (MODO DEBUG MAGNETÓMETRO) ---")
+    print("--- INICIANDO CICLO COMPLETO (AUTOMÁTICO) ---")
     
     try:
         camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
@@ -82,8 +83,8 @@ def main():
     
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
     Z_UMBRAL_LOCKON = 120    
-    Z_LIMITE_FINAL = 97   
-    Z_LIMITE_ENTREGA = 150
+    Z_LIMITE_FINAL = 90   
+    Z_LIMITE_ENTREGA = 250
     TOLERANCIA_CENTRADO = 12 
     lockon_activado = False  
     lockon_activado_boca = False
@@ -95,9 +96,10 @@ def main():
     contador_sondeo_color = 0
     fase_sondeo_color = "IZQUIERDA" # Inicia buscando a la izquierda
 
-    # --- VARIABLES PARA RASTREO CONTINUO DE AGARRE ---
-    sosteniendo_y_logueando = False
-    ultimo_tiempo_log = 0
+    # --- VARIABLES DE MONITOREO AUTOMÁTICO ---
+    pastilla_en_transporte = False
+    contador_caida = 0
+    UMBRAL_PERSISTENCIA_CAIDA = 15 # Requiere ~1.5 segundos de "VACIA" para confirmar caída
     
     print("Sistema listo. Parpadea 2 veces para iniciar el ciclo.")
 
@@ -105,12 +107,6 @@ def main():
         while True:
             frame = camara.get_frame()
             if frame is None: continue
-
-            # --- LOGUEO CONTINUO SI SE CONFIRMÓ AGARRE ---
-            if sosteniendo_y_logueando and (time.time() - ultimo_tiempo_log > 0.1):
-                m = brazo.mag1
-                log_mag_data(m[0], m[1], m[2], "HOLDING_TRACK")
-                ultimo_tiempo_log = time.time()
 
             # Actualizar z_coord al inicio
             dist_actual = brazo.obtener_distancia()
@@ -127,14 +123,25 @@ def main():
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
 
-            # --- DETECCIÓN DE PÉRDIDA DE OBJETO (Seguridad) ---
-            #if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ESPERA_CONFIRMACION_ENTREGA]:
-            #    if brazo.estado_pinza == "VACIA":
-            #        print("\n" + "!"*50)
-            #        print("!!! ALERTA: OBJETO PERDIDO DURANTE TRANSPORTE !!!")
-            #        print("!"*50 + "\n")
-            #        estado_actual = Estado.HOME
-            #        macro_movimiento_hecho = False
+            # --- MONITOREO DE CAÍDA (Con filtro de persistencia) ---
+            if pastilla_en_transporte:
+                # Debug discreto cada 0.5s para monitorear el sensor en movimiento
+                if time.time() % 0.5 < 0.05:
+                    m = brazo.mag1
+                    print(f"[DEBUG MAG] X:{m[0]:.1f} Y:{m[1]:.1f} | Pinza: {brazo.estado_pinza} | Filtro: {contador_caida}/{UMBRAL_PERSISTENCIA_CAIDA}")
+
+                if brazo.estado_pinza == "VACIA":
+                    contador_caida += 1
+                    if contador_caida >= UMBRAL_PERSISTENCIA_CAIDA:
+                        print("\n" + "!"*50)
+                        print("!!! CONFIRMADO: LA PASTILLA SE HA CAÍDO !!!")
+                        print("!"*50 + "\n")
+                        pastilla_en_transporte = False
+                        estado_actual = Estado.HOME
+                        macro_movimiento_hecho = False
+                        contador_caida = 0
+                else:
+                    contador_caida = 0 # Resetear si el sensor vuelve a detectar el objeto
             
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
@@ -142,7 +149,7 @@ def main():
 
             if estado_actual == Estado.HOME:
                 lockon_activado = False
-                sosteniendo_y_logueando = False # Resetear logueo al volver a HOME
+                pastilla_en_transporte = False
                 if not macro_movimiento_hecho:
                     brazo.mover_a_estado("HOME", forzar=True)
                     detector_parpadeo.start_cam() # Iniciar cámara de laptop en HOME
@@ -267,7 +274,7 @@ def main():
 
                         # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
                         # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
-                        FINAL_CORRECTION_S0 = 0  # Grados extra para centrar X
+                        FINAL_CORRECTION_S0 = 4  # Grados extra para centrar X
                         FINAL_CORRECTION_S15 = 2 # Grados extra para centrar Y (hacia arriba)
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
@@ -326,33 +333,36 @@ def main():
                         recuperacion_pastilla_intentada = False
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
-                cv2.putText(frame_vis, "DEBUG: Presiona 'c' para cerrar y LOGUEAR", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame_vis, "ALINEACION OK - Presiona 'c' para CERRAR", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Solo actuar si el usuario presiona 'c'
                 if key == ord('c'):
-                    print("\n[DEBUG] Cerrando pinza para test de magnetómetro...")
-                    # Usamos forzar=True para asegurar el envío del comando
+                    print("\n[CONTROL] Iniciando secuencia de agarre validada...")
+                    
+                    # 1. Cerrar pinza
+                    print("[CONTROL] Cerrando pinza...")
                     brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
-                    print("[DEBUG] Esperando estabilización del sensor (1.5s)...")
+                    time.sleep(1.0)
+                    
+                    # 2. Levantar para validar
+                    print("[CONTROL] Levantando para validar con magnetometro...")
+                    brazo.mover_a_estado("PRE_RECOLECCION", esperar=True)
                     time.sleep(1.5) 
                     
+                    # 3. Decisión autónoma basada en magnetómetro (Umbral flexible -914)
                     m1 = brazo.mag1
-                    print(f"\n>>> VALORES MAGNETÓMETRO: X={m1[0]:.1f}, Y={m1[1]:.1f}, Z={m1[2]:.1f}")
-                    print(f">>> ESTADO DETECTADO POR BRAZO: {brazo.estado_pinza}")
-                    
-                    # PREGUNTA MANUAL PARA EL LOG
-                    resultado = ask_user_success()
-                    log_mag_data(m1[0], m1[1], m1[2], resultado)
-                    
-                    if resultado == 'y':
-                        print("[DEBUG] Agarre exitoso. Iniciando seguimiento continuo...")
-                        sosteniendo_y_logueando = True
-                        brazo.mover_a_estado("PRE_RECOLECCION", esperar=True) 
+                    if brazo.estado_pinza == "CON_OBJETO":
+                        print(f"[¡ÉXITO!] Objeto detectado (X: {m1[0]:.1f}). Procediendo a entrega.")
+                        log_mag_data(m1[0], m1[1], m1[2], "HOLDING_TRACK")
+                        pastilla_en_transporte = True
                         estado_actual = Estado.OBSERVACION_MANIQUI
                     else:
-                        print("[DEBUG] Agarre fallido o cancelado. No soltamos automáticamente, regresando a observación.")
-                        sosteniendo_y_logueando = False
-                        # Para debuggear, abrimos la pinza manualmente aquí
-                        brazo.mover_tiempo([(12, 90)], esperar=True) 
+                        print(f"[FALLO] Pinza vacia o agarre debil (X: {m1[0]:.1f}). Reintentando...")
+                        log_mag_data(m1[0], m1[1], m1[2], "AUTO_RETRY_EMPTY")
+                        pastilla_en_transporte = False
+                        brazo.mover_tiempo([(12, 80)], esperar=True) # Abrir
                         estado_actual = Estado.OBSERVACION
+                    
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
@@ -488,7 +498,7 @@ def main():
 
             elif estado_actual == Estado.ENTREGA:
                 sosteniendo_y_logueando = False # Detener logueo al soltar
-                brazo.mover_tiempo([(12, 90)])
+                brazo.mover_tiempo([(12, 80)]) # Abrir a 80
                 time.sleep(1)
                 estado_actual = Estado.HOME
                 macro_movimiento_hecho = False
@@ -516,14 +526,16 @@ def main():
             # Colores: Verde para objeto, Amarillo para abierta, Rojo para vacía
             col_p = (0, 255, 0) if est_p == "CON_OBJETO" else (0, 255, 255) if est_p == "ABIERTA" else (0, 0, 255)
             
-            texto_mag = f"M1: X:{m1[0]:.0f} Y:{m1[1]:.0f} Z:{m1[2]:.0f} | PINZA: {est_p}"
-            (t_w, t_h), _ = cv2.getTextSize(texto_mag, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            pos_x_mag = frame_vis.shape[1] - t_w - 10
-            pos_y_mag = frame_vis.shape[0] - 50 # Subido para no chocar con ESTADO
-            cv2.putText(frame_vis, texto_mag, (pos_x_mag, pos_y_mag), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, col_p, 1)
+            # Mostrar valores crudos para calibración manual
+            texto_mag_vals = f"MAG RAW -> X: {m1[0]:.1f} Y: {m1[1]:.1f} Z: {m1[2]:.1f}"
+            texto_mag_status = f"ESTADO PINZA: {est_p}"
             
-            cv2.putText(frame_vis, f"ESTADO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame_vis, texto_mag_vals, (10, frame_vis.shape[0] - 70), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame_vis, texto_mag_status, (10, frame_vis.shape[0] - 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, col_p, 2)
+            
+            cv2.putText(frame_vis, f"ESTADO CICLO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
 
     except KeyboardInterrupt:

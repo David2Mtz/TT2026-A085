@@ -3,7 +3,10 @@ import csv
 import os
 import datetime
 
-FILE_NAME = "log_magnetometro.csv"
+# Definir la ruta absoluta basada en la ubicación de este archivo
+# para que siempre se guarde en la carpeta raíz del proyecto TT2026-A085
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FILE_NAME = os.path.join(BASE_DIR, "log_magnetometro.csv")
 
 def log_mag_data(x, y, z, success):
     """
@@ -23,7 +26,7 @@ def log_mag_data(x, y, z, success):
             
             writer.writerow([timestamp, x, y, z, success])
         
-        print(f"[LOGGER] Datos guardados en {FILE_NAME}")
+        print(f"[LOGGER] Datos guardados exitosamente en: {FILE_NAME}")
     except Exception as e:
         print(f"[ERROR LOGGER] No se pudo escribir en el archivo: {e}")
 

@@ -247,21 +247,25 @@ def main():
                 cv2.putText(frame_vis, "CALIBRAR: Presiona 'c' para LOGUEAR y cerrar", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 if key == ord('c'):
                     print("[CONTROL] Agarre de calibracion. Cerrando pinza...")
-                    brazo.mover_tiempo([(12, 10)], esperar=True) 
+                    brazo.mover_tiempo([(12, 0)], esperar=True) # Cerrar a 0
                     print("[CALIBRACION] Esperando estabilizacion (1.5s)...")
                     time.sleep(1.5)
                     
                     # CAPTURAR Y LOGUEAR
                     m1 = brazo.mag1
                     resultado = ask_user_success()
-                    log_mag_data(m1[0], m1[1], m1[2], resultado)
+                    
+                    # Loguear siempre para calibración
+                    etiqueta = "HOLDING_TRACK" if resultado == 'y' else "EMPTY_OR_FAIL"
+                    log_mag_data(m1[0], m1[1], m1[2], etiqueta)
                     
                     if resultado == 'y':
                         print("[CONTROL] Levantando...")
                         brazo.mover_a_estado("PRE_RECOLECCION", esperar=True) 
                         estado_actual = Estado.OBSERVACION_MANIQUI
                     else:
-                        brazo.mover_tiempo([(12, 90)], esperar=True) 
+                        print("[CONTROL] Fallo registrado. Reintentando...")
+                        brazo.mover_tiempo([(12, 80)], esperar=True) # Abrir a 80
                         estado_actual = Estado.OBSERVACION
                     macro_movimiento_hecho = False
 
@@ -334,7 +338,7 @@ def main():
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.ENTREGA:
-                brazo.mover_tiempo([(12, 90)])
+                brazo.mover_tiempo([(12, 80)]) # Abrir a 80
                 time.sleep(1)
                 estado_actual = Estado.HOME
                 macro_movimiento_hecho = False
