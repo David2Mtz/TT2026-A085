@@ -44,9 +44,11 @@ load_dotenv()
 # ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Verde" 
+COLOR_OBJETIVO = "Azul" 
 
 from constants.config import OFFSET_X, OFFSET_Y
+
+from modules.mag_logger import log_mag_data, ask_user_success
 
 class Estado:
     HOME = "HOME"
@@ -61,7 +63,7 @@ class Estado:
     EMERGENCIA = "EMERGENCIA"
 
 def main():
-    print("--- INICIANDO CICLO COMPLETO (PASTILLAS) ---")
+    print("--- INICIANDO CICLO COMPLETO (MODO DEBUG MAGNETÓMETRO) ---")
     
     try:
         camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
@@ -80,8 +82,8 @@ def main():
     
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
     Z_UMBRAL_LOCKON = 120    
-    Z_LIMITE_FINAL = 98   
-    Z_LIMITE_ENTREGA = 250
+    Z_LIMITE_FINAL = 97   
+    Z_LIMITE_ENTREGA = 150
     TOLERANCIA_CENTRADO = 12 
     lockon_activado = False  
     lockon_activado_boca = False
@@ -92,6 +94,10 @@ def main():
     contador_sondeo = 0
     contador_sondeo_color = 0
     fase_sondeo_color = "IZQUIERDA" # Inicia buscando a la izquierda
+
+    # --- VARIABLES PARA RASTREO CONTINUO DE AGARRE ---
+    sosteniendo_y_logueando = False
+    ultimo_tiempo_log = 0
     
     print("Sistema listo. Parpadea 2 veces para iniciar el ciclo.")
 
@@ -99,6 +105,12 @@ def main():
         while True:
             frame = camara.get_frame()
             if frame is None: continue
+
+            # --- LOGUEO CONTINUO SI SE CONFIRMÓ AGARRE ---
+            if sosteniendo_y_logueando and (time.time() - ultimo_tiempo_log > 0.1):
+                m = brazo.mag1
+                log_mag_data(m[0], m[1], m[2], "HOLDING_TRACK")
+                ultimo_tiempo_log = time.time()
 
             # Actualizar z_coord al inicio
             dist_actual = brazo.obtener_distancia()
@@ -116,13 +128,13 @@ def main():
                 macro_movimiento_hecho = False
 
             # --- DETECCIÓN DE PÉRDIDA DE OBJETO (Seguridad) ---
-            if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ESPERA_CONFIRMACION_ENTREGA]:
-                if brazo.estado_pinza == "VACIA":
-                    print("\n" + "!"*50)
-                    print("!!! ALERTA: OBJETO PERDIDO DURANTE TRANSPORTE !!!")
-                    print("!"*50 + "\n")
-                    estado_actual = Estado.HOME
-                    macro_movimiento_hecho = False
+            #if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ESPERA_CONFIRMACION_ENTREGA]:
+            #    if brazo.estado_pinza == "VACIA":
+            #        print("\n" + "!"*50)
+            #        print("!!! ALERTA: OBJETO PERDIDO DURANTE TRANSPORTE !!!")
+            #        print("!"*50 + "\n")
+            #        estado_actual = Estado.HOME
+            #        macro_movimiento_hecho = False
             
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
@@ -130,6 +142,7 @@ def main():
 
             if estado_actual == Estado.HOME:
                 lockon_activado = False
+                sosteniendo_y_logueando = False # Resetear logueo al volver a HOME
                 if not macro_movimiento_hecho:
                     brazo.mover_a_estado("HOME", forzar=True)
                     detector_parpadeo.start_cam() # Iniciar cámara de laptop en HOME
@@ -254,8 +267,8 @@ def main():
 
                         # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
                         # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
-                        FINAL_CORRECTION_S0 = -2  # Grados extra para centrar X
-                        FINAL_CORRECTION_S15 = 0 # Grados extra para centrar Y (hacia arriba)
+                        FINAL_CORRECTION_S0 = 0  # Grados extra para centrar X
+                        FINAL_CORRECTION_S15 = 2 # Grados extra para centrar Y (hacia arriba)
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
                         brazo.mover_tiempo([
@@ -313,19 +326,32 @@ def main():
                         recuperacion_pastilla_intentada = False
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
-                cv2.putText(frame_vis, "CONFIRMAR - Presiona 'c'", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame_vis, "DEBUG: Presiona 'c' para cerrar y LOGUEAR", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 if key == ord('c'):
-                    print("[CONTROL] Agarre confirmado. Cerrando pinza...")
-                    brazo.mover_tiempo([(12, 10)], esperar=True) 
-                    time.sleep(1.0) # Dar tiempo para que el magnetómetro estabilice la lectura
+                    print("\n[DEBUG] Cerrando pinza para test de magnetómetro...")
+                    # Usamos forzar=True para asegurar el envío del comando
+                    brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
+                    print("[DEBUG] Esperando estabilización del sensor (1.5s)...")
+                    time.sleep(1.5) 
                     
-                    if brazo.estado_pinza == "CON_OBJETO":
-                        print("[CONTROL] Objeto detectado. Levantando...")
+                    m1 = brazo.mag1
+                    print(f"\n>>> VALORES MAGNETÓMETRO: X={m1[0]:.1f}, Y={m1[1]:.1f}, Z={m1[2]:.1f}")
+                    print(f">>> ESTADO DETECTADO POR BRAZO: {brazo.estado_pinza}")
+                    
+                    # PREGUNTA MANUAL PARA EL LOG
+                    resultado = ask_user_success()
+                    log_mag_data(m1[0], m1[1], m1[2], resultado)
+                    
+                    if resultado == 'y':
+                        print("[DEBUG] Agarre exitoso. Iniciando seguimiento continuo...")
+                        sosteniendo_y_logueando = True
                         brazo.mover_a_estado("PRE_RECOLECCION", esperar=True) 
                         estado_actual = Estado.OBSERVACION_MANIQUI
                     else:
-                        print("[ALERTA] Falló el agarre (Pinza Vacía). Regresando a observación.")
-                        brazo.mover_tiempo([(12, 90)], esperar=True) # Abrir pinza
+                        print("[DEBUG] Agarre fallido o cancelado. No soltamos automáticamente, regresando a observación.")
+                        sosteniendo_y_logueando = False
+                        # Para debuggear, abrimos la pinza manualmente aquí
+                        brazo.mover_tiempo([(12, 90)], esperar=True) 
                         estado_actual = Estado.OBSERVACION
                     macro_movimiento_hecho = False
 
@@ -461,6 +487,7 @@ def main():
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.ENTREGA:
+                sosteniendo_y_logueando = False # Detener logueo al soltar
                 brazo.mover_tiempo([(12, 90)])
                 time.sleep(1)
                 estado_actual = Estado.HOME

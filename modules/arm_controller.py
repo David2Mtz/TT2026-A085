@@ -12,7 +12,7 @@ class ArmController:
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial sincronizado con el firmware
-        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 13: 0, 12: 90}
+        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 8: 0, 12: 90}
         self.distancia = 999
         self.mag1 = [0.0, 0.0, 0.0]
         self.mag2 = [0.0, 0.0, 0.0]
@@ -115,12 +115,14 @@ class ArmController:
                                     
                                     with self.lock:
                                         # 1. ¿Está abierta o cerrada? (Umbral X = 451)
+                                        # Basado en tu lectura X=457, el umbral 451 es correcto.
                                         if vals[0] < 451:
                                             self.estado_pinza = "ABIERTA"
                                             self.sujetando_objetivo = False
                                         else:
-                                            # 2. Si está cerrada, ¿tiene algo? (Umbral Y = 26.5)
-                                            if vals[1] > 26.5:
+                                            # 2. Si está cerrada, ¿tiene algo?
+                                            # Bajamos el umbral de Y de 26.5 a 10.0 para debuggear.
+                                            if vals[1] > 10.0:
                                                 self.estado_pinza = "CON_OBJETO"
                                                 self.sujetando_objetivo = True
                                             else:
@@ -140,7 +142,7 @@ class ArmController:
         necesarios = []
         for p, a in movimientos:
             # Límite extendido para el Pin 13 (Roll), 180 para los demás
-            limite = 270 if p == 13 else 180
+            limite = 270 if p == 8 else 180
             ang = max(0, min(limite, a))
             
             if forzar or self.estado_actual.get(p) != ang:
@@ -148,10 +150,12 @@ class ArmController:
         
         if not necesarios: return
         
-        cadena = "$" + ";".join([f"{p},{a}" for p, a in necesarios]) + "\n"
+        # Añadimos un espacio después de la coma para máxima compatibilidad con el firmware
+        cadena = "$" + ";".join([f"{p}, {a}" for p, a in necesarios]) + "\n"
         
         with self.lock:
             try:
+                print(f"[SERIAL SEND] {cadena.strip()}") # Ver exactamente qué se envía
                 self.event_ok.clear()
                 self.esp32.write(cadena.encode('utf-8'))
                 self.esp32.flush()
