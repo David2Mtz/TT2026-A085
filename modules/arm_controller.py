@@ -169,13 +169,14 @@ class ArmController:
                 
                 # Actualizar estado local
                 for p, a in necesarios: self.estado_actual[p] = a
-                
-                # Esperar confirmación para sincronizar movimientos largos
-                if esperar:
-                    if not self.event_ok.wait(timeout=10.0): # Timeout de seguridad más largo
-                        print("[BRAZO] Advertencia: Timeout esperando OK")
             except Exception as e:
                 print(f"ERROR SERIAL: {e}")
+                return
+
+        # Esperar confirmación para sincronizar movimientos largos (FUERA DEL LOCK)
+        if esperar:
+            if not self.event_ok.wait(timeout=10.0): # Timeout de seguridad más largo
+                print("[BRAZO] Advertencia: Timeout esperando OK")
 
     def centrar_ibvs(self, error_x, error_y, paso_x=1, paso_y=1):
         """Ajuste fino basado en visión (IBVS)."""

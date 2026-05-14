@@ -151,6 +151,7 @@ def main():
                 lockon_activado = False
                 pastilla_en_transporte = False
                 if not macro_movimiento_hecho:
+                    auto_exp.target_brightness = 130 # Resetear brillo a estándar
                     brazo.mover_a_estado("HOME", forzar=True)
                     detector_parpadeo.start_cam() # Iniciar cámara de laptop en HOME
                     macro_movimiento_hecho = True
@@ -370,7 +371,8 @@ def main():
                     macro_movimiento_hecho = True
                     lockon_activado_boca = False
                 
-                # Ajuste autónomo de luz para la boca
+                # Ajuste autónomo de luz para la boca (Brillo menor para evitar sobreexposición)
+                auto_exp.target_brightness = 90
                 auto_exp.update(frame, camara)
 
                 # Rotar frame para el maniquí
@@ -389,7 +391,8 @@ def main():
                     cv2.putText(frame_vis, "Buscando boca (Frame Rotado)...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
             elif estado_actual == Estado.SEGUIMIENTO_BOCA:
-                # Ajuste autónomo continuo para la boca
+                # Ajuste autónomo continuo para la boca (Mantener brillo bajo)
+                auto_exp.target_brightness = 90
                 auto_exp.update(frame, camara)
 
                 # Rotar frame para el maniquí
