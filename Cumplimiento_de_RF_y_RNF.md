@@ -5,19 +5,19 @@ Este documento evalúa el estado del prototipo frente a los requerimientos defin
 ## 1. Requerimientos Funcionales (RF)
 
 ### 1.1 Brazo Robótico (Tabla 2)
-| ID | Requerimiento | Estado | Observación |
-| :--- | :--- | :--- | :--- |
-| **RF-01** | Restringir movimiento (40-55 cm) | **Cumplido** | El software aplica límites angulares (`np.clip`) y el sensor ToF detiene el avance en el eje Z. |
-| **RF-02** | Movimiento a contenedores | **Cumplido** | Implementado mediante `Estado.OBSERVACION` y la posición predefinida en `posiciones.py`. |
-| **RF-03** | Sujeción de comprimido | **Cumplido** | Ejecuta la secuencia de cierre (Pin 12 a 0°) tras la alineación visual. |
-| **RF-04** | Mantener fuerza de sujeción | **Cumplido** | El material e-Flesh y la rampa de cierre en el firmware aseguran un agarre estable sin fractura. |
-| **RF-05** | Entrega a 15 cm de la boca | **Cumplido** | `Z_LIMITE_ENTREGA = 150` (150mm = 15cm) definido en `ciclo_completo.py`. |
-| **RF-06** | Detenerse si suelta comprimido | **Cumplido** | Implementado el **Monitor de Caída** con magnetómetro en tiempo real. |
-| **RF-07** | Detenerse si no detecta boca | **Cumplido** | La máquina de estados regresa a `OBSERVACION_MANIQUI` si se pierde el objetivo visual. |
-| **RF-08** | Sensores de contacto (FSR) | **No Detectado** | El firmware actual solo reporta ToF y Magnetómetro. No hay lectura de FSR en el flujo serial. |
-| **RF-09** | Parado de emergencia físico | **Cumplido** | Botón en Pin 34 funcional, gestionado por interrupción en hardware y detectado por software. |
-| **RF-10** | Regreso a HOME tras error | **Cumplido** | Implementado en los bloques `finally` y en la lógica de emergencia. |
-| **RF-11** | Inicio mediante comando BCI | **Parcial** | Se utiliza `BlinkDetector` (parpadeos) como disparador de intención. |
+| ID        | Requerimiento                    | Estado           | Observación                                                                                      |
+| :-------- | :------------------------------- | :--------------- | :----------------------------------------------------------------------------------------------- |
+| **RF-01** | Restringir movimiento (40-55 cm) | **Cumplido**     | El software aplica límites angulares (`np.clip`) y el sensor ToF detiene el avance en el eje Z.  |
+| **RF-02** | Movimiento a contenedores        | **Cumplido**     | Implementado mediante `Estado.OBSERVACION` y la posición predefinida en `posiciones.py`.         |
+| **RF-03** | Sujeción de comprimido           | **Cumplido**     | Ejecuta la secuencia de cierre (Pin 12 a 0°) tras la alineación visual.                          |
+| **RF-04** | Mantener fuerza de sujeción      | **Cumplido**     | El material e-Flesh y la rampa de cierre en el firmware aseguran un agarre estable sin fractura. |
+| **RF-05** | Entrega a 15 cm de la boca       | **Cumplido**     | `Z_LIMITE_ENTREGA = 150` (150mm = 15cm) definido en `ciclo_completo.py`.                         |
+| **RF-06** | Detenerse si suelta comprimido   | **Cumplido**     | Implementado el **Monitor de Caída** con magnetómetro en tiempo real.                            |
+| **RF-07** | Detenerse si no detecta boca     | **Cumplido**     | La máquina de estados regresa a `OBSERVACION_MANIQUI` si se pierde el objetivo visual.           |
+| **RF-08** | Sensores de contacto (FSR)       | **No Detectado** | El firmware actual solo reporta ToF y Magnetómetro. No hay lectura de FSR en el flujo serial.    |
+| **RF-09** | Parado de emergencia físico      | **Cumplido**     | Botón en Pin 34 funcional, gestionado por interrupción en hardware y detectado por software.     |
+| **RF-10** | Regreso a HOME tras error        | **Cumplido**     | Implementado en los bloques `finally` y en la lógica de emergencia.                              |
+| **RF-11** | Inicio mediante comando BCI      | **Parcial**      | Se utiliza `BlinkDetector` (parpadeos) como disparador de intención.                             |
 
 ### 1.2 Visión por Computadora (Tabla 5)
 | ID | Requerimiento | Estado | Observación |

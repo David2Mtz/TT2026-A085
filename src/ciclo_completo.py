@@ -84,7 +84,7 @@ def main():
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
     Z_UMBRAL_LOCKON = 120    
     Z_LIMITE_FINAL = 90   
-    Z_LIMITE_ENTREGA = 250
+    Z_LIMITE_ENTREGA = 160
     TOLERANCIA_CENTRADO = 12 
     lockon_activado = False  
     lockon_activado_boca = False
@@ -274,8 +274,8 @@ def main():
 
                         # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
                         # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
-                        FINAL_CORRECTION_S0 = 4  # Grados extra para centrar X
-                        FINAL_CORRECTION_S15 = 2 # Grados extra para centrar Y (hacia arriba)
+                        FINAL_CORRECTION_S0 = 0  # Grados extra para centrar X
+                        FINAL_CORRECTION_S15 = 3 # Grados extra para centrar Y (hacia arriba)
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
                         brazo.mover_tiempo([
@@ -333,37 +333,32 @@ def main():
                         recuperacion_pastilla_intentada = False
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
-                cv2.putText(frame_vis, "ALINEACION OK - Presiona 'c' para CERRAR", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame_vis, "VERIFICANDO AGARRE AUTOMATICO...", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
                 
-                # Solo actuar si el usuario presiona 'c'
-                if key == ord('c'):
-                    print("\n[CONTROL] Iniciando secuencia de agarre validada...")
-                    
-                    # 1. Cerrar pinza
-                    print("[CONTROL] Cerrando pinza...")
-                    brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
-                    time.sleep(1.0)
-                    
-                    # 2. Levantar para validar
-                    print("[CONTROL] Levantando para validar con magnetometro...")
-                    brazo.mover_a_estado("PRE_RECOLECCION", esperar=True)
-                    time.sleep(1.5) 
-                    
-                    # 3. Decisión autónoma basada en magnetómetro (Umbral flexible -914)
-                    m1 = brazo.mag1
-                    if brazo.estado_pinza == "CON_OBJETO":
-                        print(f"[¡ÉXITO!] Objeto detectado (X: {m1[0]:.1f}). Procediendo a entrega.")
-                        log_mag_data(m1[0], m1[1], m1[2], "HOLDING_TRACK")
-                        pastilla_en_transporte = True
-                        estado_actual = Estado.OBSERVACION_MANIQUI
-                    else:
-                        print(f"[FALLO] Pinza vacia o agarre debil (X: {m1[0]:.1f}). Reintentando...")
-                        log_mag_data(m1[0], m1[1], m1[2], "AUTO_RETRY_EMPTY")
-                        pastilla_en_transporte = False
-                        brazo.mover_tiempo([(12, 80)], esperar=True) # Abrir
-                        estado_actual = Estado.OBSERVACION
-                    
-                    macro_movimiento_hecho = False
+                # Ejecutar maniobra de cierre y levantamiento
+                print("\n[CONTROL] Cerrando pinza...")
+                brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
+                time.sleep(1.0)
+                
+                print("[CONTROL] Levantando para validar con magnetometro...")
+                brazo.mover_a_estado("PRE_RECOLECCION", esperar=True)
+                time.sleep(1.2) # Tiempo extra para estabilizar lectura
+                
+                # DECISIÓN AUTÓNOMA BASADA EN MAGNETÓMETRO
+                m1 = brazo.mag1
+                if brazo.estado_pinza == "CON_OBJETO":
+                    print(f"[¡ÉXITO!] Pastilla detectada (X: {m1[0]}). Guardando log y procediendo a entrega.")
+                    log_mag_data(m1[0], m1[1], m1[2], "HOLDING_TRACK")
+                    pastilla_en_transporte = True
+                    estado_actual = Estado.OBSERVACION_MANIQUI
+                else:
+                    print(f"[FALLO] Pinza vacia o agarre debil (X: {m1[0]}). Reintentando ciclo...")
+                    log_mag_data(m1[0], m1[1], m1[2], "AUTO_RETRY_EMPTY")
+                    pastilla_en_transporte = False
+                    brazo.mover_tiempo([(12, 80)], esperar=True) # Abrir
+                    estado_actual = Estado.OBSERVACION
+                
+                macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
                 if not macro_movimiento_hecho:
