@@ -12,15 +12,22 @@ class AutoExposureControl:
         
         # Límites conocidos
         self.min_led = 0
-        self.max_led = 255
+        self.max_led = 100
         self.min_exp = 100
-        self.max_exp = 1100
+        self.max_exp = 900
         
         # Estado actual
-        self.current_led = 140
-        self.current_exp = 400
+        self.current_led = 48
+        self.current_exp = 500
         self.last_adjustment_time = 0
         self.adjustment_cooldown = 0.5 # Segundos entre ajustes para dejar estabilizar
+
+    def set_max_exposure(self, value):
+        """ Permite ajustar el límite máximo de exposición dinámicamente """
+        self.max_exp = value
+        # Asegurar que la exposición actual no exceda el nuevo máximo
+        if self.current_exp > self.max_exp:
+            self.current_exp = self.max_exp
 
     def update(self, frame, camara):
         """
@@ -48,18 +55,18 @@ class AutoExposureControl:
         # Lógica de ajuste tipo "Cámara Fotográfica"
         if diff > 0: # Demasiado oscuro -> Aumentar luz
             if self.current_led < self.max_led:
-                self.current_led = min(self.max_led, self.current_led + 30)
+                self.current_led = min(self.max_led, self.current_led + 20)
                 camara.set_led_brightness(self.current_led)
             elif self.current_exp < self.max_exp:
-                self.current_exp = min(self.max_exp, self.current_exp + 100)
+                self.current_exp = min(self.max_exp, self.current_exp + 50)
                 camara.set_exposure(self.current_exp)
         
         else: # Demasiado brillante -> Reducir luz
             if self.current_exp > self.min_exp:
-                self.current_exp = max(self.min_exp, self.current_exp - 100)
+                self.current_exp = max(self.min_exp, self.current_exp - 50)
                 camara.set_exposure(self.current_exp)
             elif self.current_led > self.min_led:
-                self.current_led = max(self.min_led, self.current_led - 30)
+                self.current_led = max(self.min_led, self.current_led - 20)
                 camara.set_led_brightness(self.current_led)
 
         self.last_adjustment_time = now

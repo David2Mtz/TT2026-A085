@@ -60,10 +60,21 @@ void setup() {
   s = esp_camera_sensor_get();
   // Bloqueo de controles automáticos para visión artificial estable
   s->set_gain_ctrl(s, 0);      // 0 = Ganancia manual
-  s->set_agc_gain(s, 0);       // Ganancia al mínimo (0-30)
+  s->set_agc_gain(s, 1);       // Ganancia al mínimo (0-30)
   s->set_exposure_ctrl(s, 0);       // 0 = Exposición manual (CRÍTICO)
-  s->set_aec_value(s, 300);    // Valor inicial estándar
-  s->set_awb_gain(s, 1);       
+  
+  s->set_aec_value(s, 500);      // Valor inicial estándar
+  
+  s->set_sharpness(s, 2);
+
+  s->set_awb_gain(s, 1);    
+  s->set_raw_gma(s, 1);
+
+  s->set_saturation(s, 2);
+  s->set_contrast(s, 1);
+
+  s->set_whitebal(s, 0);       // Habilita el balance de blancos automático
+  s->set_wb_mode(s, 1);
 }
 
 void loop() {

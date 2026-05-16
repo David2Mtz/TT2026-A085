@@ -12,14 +12,20 @@ class ArmController:
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial sincronizado con el firmware
-        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 13: 0, 12: 90}
+        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 8: 0, 12: 80}
         self.distancia = 999
+        self.mag1 = [0.0, 0.0, 0.0]
+        self.mag2 = [0.0, 0.0, 0.0]
         self.intentos_y = 0
         self.esp32 = None
         self.running = True
         self.en_emergencia = False  # Nueva variable de estado
         self.lock = threading.Lock()
         self.event_ok = threading.Event() # Evento para esperar el 'OK'
+        
+        # Estado de la pinza
+        self.estado_pinza = "DESCONOCIDO" # "ABIERTA", "VACIA", "CON_OBJETO"
+        self.sujetando_objetivo = False # Mantener por compatibilidad
         
         # Filtro para el sensor ToF
         self.lecturas_distancia = []
@@ -102,6 +108,34 @@ class ArmController:
                                             # Mantener self.distancia como el promedio actual
                                             self.distancia = sum(self.lecturas_distancia) // len(self.lecturas_distancia)
                                 except: pass
+                            elif linea.startswith("MAG1:"):
+                                try:
+                                    vals = [float(x) for x in linea.split(":")[1].split(",")]
+                                    
+                                    with self.lock:
+                                        self.mag1 = vals
+                                        
+                                        # PRIORIDAD: Verificar el ángulo del servo de la pinza (Pin 12)
+                                        # Si la pinza está abierta (>= 80), no puede estar "CON_OBJETO"
+                                        angulo_pinza = self.estado_actual.get(12, 80)
+                                        
+                                        if angulo_pinza >= 80:
+                                            self.estado_pinza = "ABIERTA"
+                                            self.sujetando_objetivo = False
+                                        else:
+                                            # Solo evaluamos magnetómetro si la pinza está en posición de cierre (< 80)
+                                            # LÓGICA BASADA EN EXPERIMENTOS (13 Mayo 2026):
+                                            # El eje Z es el más sensible al "aplastamiento" del objeto.
+                                            # VACIO_CERRADO: Z ~ 1020
+                                            # CON_OBJETO / HOLDING: Z ~ 925 a 965
+                                            # UMBRAL FLEXIBLE Z: 980
+                                            if vals[2] < 980: 
+                                                self.estado_pinza = "CON_OBJETO"
+                                                self.sujetando_objetivo = True
+                                            else:
+                                                self.estado_pinza = "VACIA"
+                                                self.sujetando_objetivo = False
+                                except: pass
                         buffer = lineas[-1]
                 time.sleep(0.005)
             except: break
@@ -115,7 +149,7 @@ class ArmController:
         necesarios = []
         for p, a in movimientos:
             # Límite extendido para el Pin 13 (Roll), 180 para los demás
-            limite = 270 if p == 13 else 180
+            limite = 270 if p == 8 else 180
             ang = max(0, min(limite, a))
             
             if forzar or self.estado_actual.get(p) != ang:
@@ -123,10 +157,12 @@ class ArmController:
         
         if not necesarios: return
         
-        cadena = "$" + ";".join([f"{p},{a}" for p, a in necesarios]) + "\n"
+        # Añadimos un espacio después de la coma para máxima compatibilidad con el firmware
+        cadena = "$" + ";".join([f"{p}, {a}" for p, a in necesarios]) + "\n"
         
         with self.lock:
             try:
+                print(f"[SERIAL SEND] {cadena.strip()}") # Ver exactamente qué se envía
                 self.event_ok.clear()
                 self.esp32.write(cadena.encode('utf-8'))
                 self.esp32.flush()
@@ -141,19 +177,18 @@ class ArmController:
             except Exception as e:
                 print(f"ERROR SERIAL: {e}")
 
-    def centrar_ibvs(self, error_x, error_y):
+    def centrar_ibvs(self, error_x, error_y, paso_x=1, paso_y=1):
         """Ajuste fino basado en visión (IBVS)."""
         tolerancia = 8
-        paso = 1
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
             return True
             
         cmds = []
-        if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso))
-        elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso))
+        if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso_x))
+        elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso_x))
         
-        if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso))
-        elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso))
+        if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso_y))
+        elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso_y))
         
         if cmds: self.mover_tiempo(cmds, esperar=False) # No esperamos OK en IBVS para mayor velocidad
         return False
@@ -161,9 +196,9 @@ class ArmController:
     def centrar_proporcional(self, error_x, error_y):
         """Ajuste inteligente basado en un controlador Proporcional."""
         tolerancia = 10
-        kp_x = 0.02 
+        kp_x = 0.03 # Aumentado levemente
         kp_y = 0.02  
-        max_paso = 3 
+        max_paso = 4 # Aumentado de 3 a 4
         
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
             return True 

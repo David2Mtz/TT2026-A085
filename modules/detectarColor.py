@@ -9,7 +9,7 @@ def get_present_colors(frame):
     """
     height, width = frame.shape[:2]
     total_pixels = height * width
-    min_pixel_threshold = total_pixels * 0.005 # Bajamos a 0.5% para detectar de lejos
+    min_pixel_threshold = total_pixels * 0.002 # Bajamos a 0.2% para mayor sensibilidad
     
     # Suavizado para reducir ruido
     frame_blur = cv2.GaussianBlur(frame, (5, 5), 0)
@@ -18,14 +18,17 @@ def get_present_colors(frame):
     detected_colors = []
     color_info = {} # Guardará { "Color": (x, y) }
     
-    # Definición de rangos
+    # Definición de rangos más inclusivos (coincidentes con pastillas_detector.py)
+    min_sat = 40
+    min_val = 40
+    
     ranges = {
         "Rojo": [
-            (np.array([0, 120, 70]), np.array([10, 255, 255])),
-            (np.array([170, 120, 70]), np.array([180, 255, 255]))
+            (np.array([0, min_sat, min_val]), np.array([10, 255, 255])),
+            (np.array([170, min_sat, min_val]), np.array([180, 255, 255]))
         ],
-        "Verde": [(np.array([40, 70, 70]), np.array([85, 255, 255]))],
-        "Azul": [(np.array([95, 70, 70]), np.array([135, 255, 255]))]
+        "Verde": [(np.array([35, min_sat, min_val]), np.array([90, 255, 255]))],
+        "Azul": [(np.array([90, min_sat, min_val]), np.array([145, 255, 255]))]
     }
     
     for color_name, color_ranges in ranges.items():

@@ -12,46 +12,58 @@
 
 #define SDA0 21
 #define SCL0 22
-#define SDA1 15
-#define SCL1 4
 #define BUTTON_PIN 34
 
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40);
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 Adafruit_MLX90393 mag1 = Adafruit_MLX90393();
-Adafruit_MLX90393 mag2 = Adafruit_MLX90393();
 
 #define SERVOMIN  100       
 #define SERVOMAX  575 
 
-// Inicializamos en 90 para asegurar que el primer movimiento a HOME sea suave
+// Estos valores son tu posición de HOME
 int angulosActuales[16] = {90, 180, 0, 0, 0, 0, 140, 0, 0, 0, 0, 0, 80, 0, 0, 90};
-// VALORES ORIGINALES RESTAURADOS
-int angulosHome[16]     = {90, 180, 0, 0, 0, 0, 140, 0, 0, 0, 0, 0, 80, 0, 0, 90};
-int retardosSeguros[16] = {15, 20, 20, 20, 20, 20, 25, 20, 20, 20, 20, 20, 1, 2, 20, 15}; 
+int retardosSeguros[16] = {7, 10, 10, 10, 10, 10, 12, 10, 10, 10, 10, 10, 7, 4, 10, 10}; 
 
 unsigned long lastSensorTime = 0;
 const int sensorInterval = 100; 
+
+// Banderas de estado de hardware para evitar crashes
+bool hasToF = false;
+bool hasMag1 = false;
 
 void setup() {
   Serial.begin(115200);
   pinMode(BUTTON_PIN, INPUT);
   
   Wire.begin(SDA0, SCL0);
-  Wire1.begin(SDA1, SCL1);
   
   pwm.begin();
   pwm.setPWMFreq(60); 
 
-  if (!lox.begin()) Serial.println("ERR:TOF_NOT_FOUND");
-  if (!mag1.begin_I2C(0x0C, &Wire)) Serial.println("ERR:MAG1_NOT_FOUND");
-  else mag1.setGain(MLX90393_GAIN_1X);
-  if (!mag2.begin_I2C(0x0C, &Wire1)) Serial.println("ERR:MAG2_NOT_FOUND");
-  else mag2.setGain(MLX90393_GAIN_1X);
+  // Inicialización controlada de sensores (con reintentos para ToF)
+  for (int i = 0; i < 3; i++) {
+    if (lox.begin()) {
+      hasToF = true;
+      break;
+    }
+    delay(200);
+  }
+  if (!hasToF) Serial.println("ERR:TOF_NOT_FOUND");
 
-  // Mover suavemente a Home al encender (desde la posicion 90 inicial)
-  int p[16]; for(int i=0; i<16; i++) p[i] = i;
-  moverSimultaneo(p, angulosHome, 16, true);
+  if (mag1.begin_I2C(0x0C, &Wire)) {
+    mag1.setGain(MLX90393_GAIN_1X);
+    hasMag1 = true;
+  } else Serial.println("ERR:MAG1_NOT_FOUND");
+
+  // --- POSICIONAMIENTO INICIAL DIRECTO (HOME) ---
+  // Enviamos los pulsos de inmediato para que el robot se fije al encender
+  for (int i = 0; i < 16; i++) {
+    int pulso = map(angulosActuales[i], 0, 180, SERVOMIN, SERVOMAX);
+    pwm.setPWM(i, 0, pulso);
+    // Sincronización del pin 2 (espejo del pin 1)
+    if (i == 1) pwm.setPWM(2, 0, (SERVOMIN + SERVOMAX) - pulso);
+  }
   
   Serial.println("SYSTEM_READY");
 }
@@ -66,9 +78,13 @@ void loop() {
       Serial.println("boton precionado");
       lastButtonState = true;
     }
+    // Limpiar buffer y forzar HOME si se presiona el botón
     while(Serial.available() > 0) Serial.read(); 
-    int p[16]; for(int i=0; i<16; i++) p[i] = i;
-    moverSimultaneo(p, angulosHome, 16, true);
+    for (int i = 0; i < 16; i++) {
+      int pulso = map(angulosActuales[i], 0, 180, SERVOMIN, SERVOMAX);
+      pwm.setPWM(i, 0, pulso);
+      if (i == 1) pwm.setPWM(2, 0, (SERVOMIN + SERVOMAX) - pulso);
+    }
   } 
   else {
     if (lastButtonState) {
@@ -91,17 +107,22 @@ void loop() {
 
   unsigned long currentMillis = millis();
   if (currentMillis - lastSensorTime >= sensorInterval) {
-    VL53L0X_RangingMeasurementData_t measure;
-    lox.rangingTest(&measure, false);
-    if (measure.RangeStatus != 4) {
-      Serial.print("DIST:"); Serial.println(measure.RangeMilliMeter);
+    // Solo leer si el sensor está presente (evita divisiones por cero/crashes)
+    if (hasToF) {
+      VL53L0X_RangingMeasurementData_t measure;
+      lox.rangingTest(&measure, false);
+      
+      Serial.print("DIST:"); 
+      if (measure.RangeStatus == 4) {
+        Serial.println("999"); // Usar 999 como indicador de fuera de rango
+      } else {
+        Serial.println(measure.RangeMilliMeter);
+      }
     }
-    float mx1, my1, mz1, mx2, my2, mz2;
-    if (mag1.readData(&mx1, &my1, &mz1)) {
-      Serial.print("MAG1:"); Serial.print(mx1); Serial.print(","); Serial.print(my1); Serial.print(","); Serial.println(mz1);
-    }
-    if (mag2.readData(&mx2, &my2, &mz2)) {
-      Serial.print("MAG2:"); Serial.print(mx2); Serial.print(","); Serial.print(my2); Serial.print(","); Serial.println(mz2);
+    
+    float mx, my, mz;
+    if (hasMag1 && mag1.readData(&mx, &my, &mz)) {
+      Serial.printf("MAG1:%.1f,%.1f,%.1f\n", mx, my, mz);
     }
     lastSensorTime = currentMillis;
   }

@@ -15,6 +15,11 @@ class CameraSerial:
         self.baud_rate = baud_rate
         self.ser = None
         self.last_brightness = -1 # Cache para evitar saturar el puerto
+        
+        # Ajustes de imagen manuales
+        self.contrast = 1.1   # 1.0 = original, >1.0 = más contraste
+        self.saturation = 1.2  # 1.0 = original, >1.0 = más saturación
+        
         self.conectar()
 
     def conectar(self):
@@ -37,6 +42,26 @@ class CameraSerial:
             val = max(0, min(1200, int(value)))
             self.ser.write(b'E' + struct.pack('>H', val))
             self.ser.flush()
+
+    def apply_image_adjustments(self, frame):
+        """ Aplica contraste y saturación de forma manual """
+        if frame is None:
+            return None
+            
+        # 1. Aplicar Contraste (y un poco de brillo si se deseara, vía beta)
+        # cv2.convertScaleAbs(src, alpha, beta) -> alpha es el factor de contraste
+        frame = cv2.convertScaleAbs(frame, alpha=self.contrast, beta=0)
+        
+        # 2. Aplicar Saturación
+        if self.saturation != 1.0:
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype("float32")
+            (h, s, v) = cv2.split(hsv)
+            s = s * self.saturation
+            s = np.clip(s, 0, 255)
+            hsv = cv2.merge([h, s, v])
+            frame = cv2.cvtColor(hsv.astype("uint8"), cv2.COLOR_HSV2BGR)
+            
+        return frame
 
     def get_frame(self, max_intentos=3):
         if not self.ser:
@@ -92,8 +117,10 @@ class CameraSerial:
 
             if frame is not None:
                 # --- Rotación de Imagen ---
-                # Opciones: cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE
                 frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                
+                # --- Ajustes Manuales ---
+                frame = self.apply_image_adjustments(frame)
                 
                 return frame 
             else:

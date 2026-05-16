@@ -35,6 +35,7 @@ from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, final
 from modules.auto_exposure import AutoExposureControl
 from modules.blinkDetector import BlinkDetector
 from constants.posiciones import POSICIONES
+from modules.mag_logger import log_mag_data, ask_user_success # Importar logger
 
 # Cargar variables de entorno
 load_dotenv()
@@ -42,9 +43,11 @@ load_dotenv()
 # ===============================================================
 # --- CONFIGURACIÓN PRINCIPAL ---
 # ===============================================================
-PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-2130')
+PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Verde" 
+COLOR_OBJETIVO = "Azul" 
+
+from constants.config import OFFSET_X, OFFSET_Y
 
 from constants.config import OFFSET_X, OFFSET_Y
 
@@ -61,7 +64,7 @@ class Estado:
     EMERGENCIA = "EMERGENCIA"
 
 def main():
-    print("--- INICIANDO CICLO COMPLETO (PASTILLAS) ---")
+    print("--- INICIANDO CICLO COMPLETO (AUTOMÁTICO) ---")
     
     try:
         camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
@@ -79,9 +82,9 @@ def main():
     macro_movimiento_hecho = False
     
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
-    Z_UMBRAL_LOCKON = 115    
-    Z_LIMITE_FINAL = 75      
-    Z_LIMITE_ENTREGA = 220
+    Z_UMBRAL_LOCKON = 120    
+    Z_LIMITE_FINAL = 90   
+    Z_LIMITE_ENTREGA = 250
     TOLERANCIA_CENTRADO = 12 
     lockon_activado = False  
     lockon_activado_boca = False
@@ -92,6 +95,11 @@ def main():
     contador_sondeo = 0
     contador_sondeo_color = 0
     fase_sondeo_color = "IZQUIERDA" # Inicia buscando a la izquierda
+
+    # --- VARIABLES DE MONITOREO AUTOMÁTICO ---
+    pastilla_en_transporte = False
+    contador_caida = 0
+    UMBRAL_PERSISTENCIA_CAIDA = 15 # Requiere ~1.5 segundos de "VACIA" para confirmar caída
     
     print("Sistema listo. Parpadea 2 veces para iniciar el ciclo.")
 
@@ -114,6 +122,26 @@ def main():
                 print("[SISTEMA] Entrando en modo EMERGENCIA...")
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
+
+            # --- MONITOREO DE CAÍDA (Con filtro de persistencia) ---
+            if pastilla_en_transporte:
+                # Debug discreto cada 0.5s para monitorear el sensor en movimiento
+                if time.time() % 0.5 < 0.05:
+                    m = brazo.mag1
+                    print(f"[DEBUG MAG] X:{m[0]:.1f} Y:{m[1]:.1f} | Pinza: {brazo.estado_pinza} | Filtro: {contador_caida}/{UMBRAL_PERSISTENCIA_CAIDA}")
+
+                if brazo.estado_pinza == "VACIA":
+                    contador_caida += 1
+                    if contador_caida >= UMBRAL_PERSISTENCIA_CAIDA:
+                        print("\n" + "!"*50)
+                        print("!!! CONFIRMADO: LA PASTILLA SE HA CAÍDO !!!")
+                        print("!"*50 + "\n")
+                        pastilla_en_transporte = False
+                        estado_actual = Estado.HOME
+                        macro_movimiento_hecho = False
+                        contador_caida = 0
+                else:
+                    contador_caida = 0 # Resetear si el sensor vuelve a detectar el objeto
             
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
@@ -121,6 +149,7 @@ def main():
 
             if estado_actual == Estado.HOME:
                 lockon_activado = False
+                pastilla_en_transporte = False
                 if not macro_movimiento_hecho:
                     brazo.mover_a_estado("HOME", forzar=True)
                     detector_parpadeo.start_cam() # Iniciar cámara de laptop en HOME
@@ -149,68 +178,57 @@ def main():
                 frame_vis, colores, info_colores = process_color_frame(frame_vis)
                 
                 if COLOR_OBJETIVO in colores:
-                    # Lógica de centrado hacia el color antes de entrar en RECOLECCION
-                    cx, cy = info_colores[COLOR_OBJETIVO]
-                    ex = cx - (frame_vis.shape[1] // 2)
-                    ey = cy - (frame_vis.shape[0] // 2)
-                    
-                    if abs(ex) <= 20 and abs(ey) <= 20:
-                        print(f"[CONTROL] Color {COLOR_OBJETIVO} centrado. Pasando a RECOLECCION.")
-                        estado_actual = Estado.RECOLECCION
-                        macro_movimiento_hecho = False
-                        contador_sondeo_color = 0
-                    else:
-                        # Centrado suave
-                        targets = {}
-                        if abs(ex) > 20:
-                            targets[0] = brazo.estado_actual[0] + (1 if ex > 0 else -1)
-                        if abs(ey) > 20:
-                            targets[15] = brazo.estado_actual[15] + (1 if ey > 0 else -1)
-                        
-                        if targets:
-                            brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                    print(f"[CONTROL] Color {COLOR_OBJETIVO} detectado. Iniciando segmentación de pastilla...")
+                    estado_actual = Estado.RECOLECCION
+                    macro_movimiento_hecho = False
+                    contador_sondeo_color = 0
                 else:
-                    # LÓGICA DE SONDEO SECUENCIAL (Izquierda -> Derecha)
+                    # LÓGICA DE SONDEO SECUENCIAL (derecha -> izquierda)
                     cv2.putText(frame_vis, f"Sondeando {COLOR_OBJETIVO} ({fase_sondeo_color})...", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     
-                    if fase_sondeo_color == "IZQUIERDA":
-                        # Mover hacia la izquierda hasta el límite (140 grados)
+                    if fase_sondeo_color == "DERECHA":
+                        # Mover hacia la derecha hasta el límite (140 grados)
                         if brazo.estado_actual[0] < 140:
                             nuevo_s0 = brazo.estado_actual[0] + 1
                             brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
                         else:
                             # Límite izquierdo alcanzado, cambiar a derecha
-                            print("[SONDEO] Límite izquierdo alcanzado. Cambiando a derecha.")
-                            fase_sondeo_color = "DERECHA"
+                            print("[SONDEO] Límite derecho alcanzado. Cambiando a izquierda.")
+                            fase_sondeo_color = "IZQUIERDA"
                     
-                    elif fase_sondeo_color == "DERECHA":
-                        # Mover hacia la derecha hasta el límite (40 grados)
+                    elif fase_sondeo_color == "IZQUIERDA":
+                        # Mover hacia la izquierda hasta el límite (40 grados)
                         if brazo.estado_actual[0] > 40:
                             nuevo_s0 = brazo.estado_actual[0] - 1
                             brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
                         else:
                             # Límite derecho alcanzado, reiniciar a izquierda
-                            print("[SONDEO] Límite derecho alcanzado. Reiniciando sondeo.")
-                            fase_sondeo_color = "IZQUIERDA"
+                            print("[SONDEO] Límite izquierdo alcanzado. Reiniciando sondeo.")
+                            fase_sondeo_color = "DERECHA"
 
             elif estado_actual == Estado.RECOLECCION:
                 # Ajuste autónomo constante durante la recolección
                 auto_exp.update(frame, camara)
                 
+                # Intentar segmentación fina de la pastilla
                 frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
+                
+                # Obtener detección de color como respaldo
+                _, colores_backup, info_colores_backup = process_color_frame(frame.copy())
                 
                 if info or lockon_activado:
                     ex, ey, area = info if info else (0, 0, 0)
                     targets = {} 
                     
                     if not lockon_activado:
-                        # Centrado Horizontal (S0) - Usamos paso de 1 grado para máxima precisión
+                        # --- PRIORIDAD X (Eje S0) ---
                         if abs(ex) > TOLERANCIA_CENTRADO:
-                            paso_x = 1 
+                            # Paso agresivo si el error es grande (>40px)
+                            paso_x = 1 if abs(ex) > 10 else 0.5
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
-                        # Centrado Vertical Inteligente (S15 + S6)
+                        # --- EJE Y (S15 + S6) ---
                         angulo_15 = brazo.estado_actual[15]
                         angulo_6 = brazo.estado_actual[6]
                         if abs(ey) > 10:
@@ -256,8 +274,8 @@ def main():
 
                         # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
                         # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
-                        FINAL_CORRECTION_S0 = -2  # Grados extra para centrar X
-                        FINAL_CORRECTION_S15 = 0 # Grados extra para centrar Y (hacia arriba)
+                        FINAL_CORRECTION_S0 = 4  # Grados extra para centrar X
+                        FINAL_CORRECTION_S15 = 2 # Grados extra para centrar Y (hacia arriba)
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
                         brazo.mover_tiempo([
@@ -276,6 +294,25 @@ def main():
                     # Resetear contadores si hay detección o lock-on
                     contador_pastilla_perdida = 0
                     recuperacion_pastilla_intentada = False
+                
+                elif COLOR_OBJETIVO in colores_backup:
+                    # RESPALDO: Si no hay segmentación fina pero sí vemos el color
+                    cx, cy = info_colores_backup[COLOR_OBJETIVO]
+                    ex_b = cx - (frame_vis.shape[1] // 2)
+                    ey_b = cy - (frame_vis.shape[0] // 2)
+                    
+                    targets = {}
+                    # Movimiento suave hacia el color detectado
+                    if abs(ex_b) > 20:
+                        targets[0] = brazo.estado_actual[0] + (1 if ex_b > 0 else -1)
+                    if abs(ey_b) > 20:
+                        targets[15] = brazo.estado_actual[15] + (1 if ey_b > 0 else -1)
+                    
+                    if targets:
+                        brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                    
+                    cv2.putText(frame_vis, f"Aproximando a {COLOR_OBJETIVO}...", (10, 60), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 else:
                     # LÓGICA DE RECUPERACIÓN (Si perdemos la pastilla)
@@ -296,13 +333,36 @@ def main():
                         recuperacion_pastilla_intentada = False
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
-                cv2.putText(frame_vis, "CONFIRMAR - Presiona 'c'", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                cv2.putText(frame_vis, "ALINEACION OK - Presiona 'c' para CERRAR", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # Solo actuar si el usuario presiona 'c'
                 if key == ord('c'):
-                    print("[CONTROL] Agarre confirmado. Levantando...")
-                    brazo.mover_tiempo([(12, 10)], esperar=True) 
-                    time.sleep(0.5)
-                    brazo.mover_a_estado("PRE_RECOLECCION", esperar=True) 
-                    estado_actual = Estado.OBSERVACION_MANIQUI
+                    print("\n[CONTROL] Iniciando secuencia de agarre validada...")
+                    
+                    # 1. Cerrar pinza
+                    print("[CONTROL] Cerrando pinza...")
+                    brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
+                    time.sleep(1.0)
+                    
+                    # 2. Levantar para validar
+                    print("[CONTROL] Levantando para validar con magnetometro...")
+                    brazo.mover_a_estado("PRE_RECOLECCION", esperar=True)
+                    time.sleep(1.5) 
+                    
+                    # 3. Decisión autónoma basada en magnetómetro (Umbral flexible -914)
+                    m1 = brazo.mag1
+                    if brazo.estado_pinza == "CON_OBJETO":
+                        print(f"[¡ÉXITO!] Objeto detectado (X: {m1[0]:.1f}). Procediendo a entrega.")
+                        log_mag_data(m1[0], m1[1], m1[2], "HOLDING_TRACK")
+                        pastilla_en_transporte = True
+                        estado_actual = Estado.OBSERVACION_MANIQUI
+                    else:
+                        print(f"[FALLO] Pinza vacia o agarre debil (X: {m1[0]:.1f}). Reintentando...")
+                        log_mag_data(m1[0], m1[1], m1[2], "AUTO_RETRY_EMPTY")
+                        pastilla_en_transporte = False
+                        brazo.mover_tiempo([(12, 80)], esperar=True) # Abrir
+                        estado_actual = Estado.OBSERVACION
+                    
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
@@ -437,7 +497,8 @@ def main():
                     macro_movimiento_hecho = False
 
             elif estado_actual == Estado.ENTREGA:
-                brazo.mover_tiempo([(12, 90)])
+                sosteniendo_y_logueando = False # Detener logueo al soltar
+                brazo.mover_tiempo([(12, 80)]) # Abrir a 80
                 time.sleep(1)
                 estado_actual = Estado.HOME
                 macro_movimiento_hecho = False
@@ -459,7 +520,22 @@ def main():
             color_z = (0, 255, 0) if z_coord <= umbral_actual else (0, 255, 255)
             cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
             
-            cv2.putText(frame_vis, f"ESTADO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            # --- VISUALIZACIÓN DE MAGNETÓMETRO (Solo M1 - Inferior Derecha) ---
+            m1 = brazo.mag1
+            est_p = brazo.estado_pinza
+            # Colores: Verde para objeto, Amarillo para abierta, Rojo para vacía
+            col_p = (0, 255, 0) if est_p == "CON_OBJETO" else (0, 255, 255) if est_p == "ABIERTA" else (0, 0, 255)
+            
+            # Mostrar valores crudos para calibración manual
+            texto_mag_vals = f"MAG RAW -> X: {m1[0]:.1f} Y: {m1[1]:.1f} Z: {m1[2]:.1f}"
+            texto_mag_status = f"ESTADO PINZA: {est_p}"
+            
+            cv2.putText(frame_vis, texto_mag_vals, (10, frame_vis.shape[0] - 70), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.putText(frame_vis, texto_mag_status, (10, frame_vis.shape[0] - 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, col_p, 2)
+            
+            cv2.putText(frame_vis, f"ESTADO CICLO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
 
     except KeyboardInterrupt:
