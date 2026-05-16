@@ -45,7 +45,7 @@ load_dotenv()
 # ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Azul" 
+COLOR_OBJETIVO = "Verde" 
 
 from constants.config import OFFSET_X, OFFSET_Y
 
@@ -122,26 +122,6 @@ def main():
                 print("[SISTEMA] Entrando en modo EMERGENCIA...")
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
-
-            # --- MONITOREO DE CAÍDA (Con filtro de persistencia) ---
-            if pastilla_en_transporte:
-                # Debug discreto cada 0.5s para monitorear el sensor en movimiento
-                if time.time() % 0.5 < 0.05:
-                    m = brazo.mag1
-                    print(f"[DEBUG MAG] X:{m[0]:.1f} Y:{m[1]:.1f} | Pinza: {brazo.estado_pinza} | Filtro: {contador_caida}/{UMBRAL_PERSISTENCIA_CAIDA}")
-
-                if brazo.estado_pinza == "VACIA":
-                    contador_caida += 1
-                    if contador_caida >= UMBRAL_PERSISTENCIA_CAIDA:
-                        print("\n" + "!"*50)
-                        print("!!! CONFIRMADO: LA PASTILLA SE HA CAÍDO !!!")
-                        print("!"*50 + "\n")
-                        pastilla_en_transporte = False
-                        estado_actual = Estado.HOME
-                        macro_movimiento_hecho = False
-                        contador_caida = 0
-                else:
-                    contador_caida = 0 # Resetear si el sensor vuelve a detectar el objeto
             
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
@@ -225,8 +205,8 @@ def main():
                     if not lockon_activado:
                         # --- PRIORIDAD X (Eje S0) ---
                         if abs(ex) > TOLERANCIA_CENTRADO:
-                            # Paso agresivo si el error es grande (>40px)
-                            paso_x = 1 if abs(ex) > 10 else 0.5
+                            # Paso fijo de 1 grado para mayor estabilidad
+                            paso_x = 1
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
                         # --- EJE Y (S15 + S6) ---
@@ -334,27 +314,39 @@ def main():
                         recuperacion_pastilla_intentada = False
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
-                cv2.putText(frame_vis, "VERIFICANDO AGARRE AUTOMATICO...", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                cv2.putText(frame_vis, "PREPARANDO AGARRE... ESPERE", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+                cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
+                cv2.waitKey(1)
                 
-                # Ejecutar maniobra de cierre y levantamiento
-                print("\n[CONTROL] Cerrando pinza...")
-                brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
+                # 1. Esperar 1 segundo antes de cerrar
+                print("\n[CONTROL] Pausa de 1s antes de cerrar...")
                 time.sleep(1.0)
                 
-                print("[CONTROL] Levantando para validar con magnetometro...")
-                brazo.mover_a_estado("PRE_RECOLECCION", esperar=True)
-                time.sleep(1.2) # Tiempo extra para estabilizar lectura
+                # 2. Cerrar pinza
+                print("[CONTROL] Cerrando pinza...")
+                brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
+                time.sleep(0.5)
                 
-                # DECISIÓN AUTÓNOMA BASADA EN MAGNETÓMETRO
+                # 3. Levantar brazo
+                print("[CONTROL] Levantando brazo para verificación...")
+                brazo.mover_a_estado("PRE_RECOLECCION", esperar=True)
+                time.sleep(1.0)
+                
+                # 4. Capturar datos y preguntar al usuario
                 m1 = brazo.mag1
-                if brazo.estado_pinza == "CON_OBJETO":
-                    print(f"[¡ÉXITO!] Pastilla detectada (X: {m1[0]}). Guardando log y procediendo a entrega.")
-                    log_mag_data(m1[0], m1[1], m1[2], "HOLDING_TRACK")
+                print(f"\n[DATOS ACTUALES] X: {m1[0]:.1f}, Y: {m1[1]:.1f}, Z: {m1[2]:.1f}")
+                resultado = ask_user_success() # Esta función detiene el bucle y pregunta y/n
+                
+                # 5. Guardar en el nuevo CSV de calibración
+                etiqueta = "CON_OBJETO" if resultado == 'y' else "VACIO_CERRADO"
+                log_mag_data(m1[0], m1[1], m1[2], etiqueta)
+                
+                if resultado == 'y':
+                    print("[¡OK!] Procediendo a búsqueda de maniquí.")
                     pastilla_en_transporte = True
                     estado_actual = Estado.OBSERVACION_MANIQUI
                 else:
-                    print(f"[FALLO] Pinza vacia o agarre debil (X: {m1[0]}). Reintentando ciclo...")
-                    log_mag_data(m1[0], m1[1], m1[2], "AUTO_RETRY_EMPTY")
+                    print("[REINTENTO] Abriendo pinza y regresando a observación.")
                     pastilla_en_transporte = False
                     brazo.mover_tiempo([(12, 80)], esperar=True) # Abrir
                     estado_actual = Estado.OBSERVACION
@@ -489,10 +481,28 @@ def main():
                 frame_vis = frame_rotated.copy()
                 
                 cv2.putText(frame_vis, "ENTREGA LISTA - Confirma con 'c'", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
                 if key == ord('c'):
-                    print("[CONTROL] Entrega confirmada. Soltando...")
-                    estado_actual = Estado.ENTREGA
+                    print("\n" + "="*50)
+                    print("[VALIDACIÓN FINAL] ¿La pastilla llegó correctamente sujeta? (y/n)")
+                    m1 = brazo.mag1
+                    print(f"[DATOS EN BOCA] X: {m1[0]:.1f}, Y: {m1[1]:.1f}, Z: {m1[2]:.1f}")
+                    
+                    resultado = ask_user_success()
+                    
+                    # Guardar en log con etiqueta de posición final
+                    etiqueta = "EXITO_ENTREGA" if resultado == 'y' else "FALLO_DURANTE_VIAJE"
+                    log_mag_data(m1[0], m1[1], m1[2], etiqueta)
+                    
+                    if resultado == 'y':
+                        print("[CONTROL] Entrega confirmada. Soltando pastilla...")
+                        estado_actual = Estado.ENTREGA
+                    else:
+                        print("[AVISO] La entrega falló (se cayó o se movió). Regresando a HOME.")
+                        estado_actual = Estado.HOME
+                    
                     macro_movimiento_hecho = False
+                    print("="*50 + "\n")
 
             elif estado_actual == Estado.ENTREGA:
                 sosteniendo_y_logueando = False # Detener logueo al soltar

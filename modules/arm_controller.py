@@ -124,12 +124,12 @@ class ArmController:
                                             self.sujetando_objetivo = False
                                         else:
                                             # Solo evaluamos magnetómetro si la pinza está en posición de cierre (< 80)
-                                            # LÓGICA BASADA EN EXPERIMENTOS (13 Mayo 2026):
-                                            # El eje Z es el más sensible al "aplastamiento" del objeto.
-                                            # VACIO_CERRADO: Z ~ 1020
-                                            # CON_OBJETO / HOLDING: Z ~ 925 a 965
-                                            # UMBRAL FLEXIBLE Z: 980
-                                            if vals[2] < 980: 
+                                            # UMBRAL FLEXIBLE:
+                                            # 1. Ignorar el fallo temporal I2C (0.0) manteniendo el estado anterior.
+                                            # 2. Rango ULTRA AMPLIO: 500 a 1400 (Al girar el brazo, el campo magnético terrestre suma hasta +-200 a Z)
+                                            if vals[0] == 0.0 and vals[1] == 0.0 and vals[2] == 0.0:
+                                                pass # No actualizar el estado si la lectura falló
+                                            elif 500 <= vals[2] <= 1400: 
                                                 self.estado_pinza = "CON_OBJETO"
                                                 self.sujetando_objetivo = True
                                             else:
