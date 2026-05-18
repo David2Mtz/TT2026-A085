@@ -124,12 +124,12 @@ class ArmController:
                                             self.sujetando_objetivo = False
                                         else:
                                             # Solo evaluamos magnetómetro si la pinza está en posición de cierre (< 80)
-                                            # LÓGICA BASADA EN EXPERIMENTOS (13 Mayo 2026):
-                                            # El eje Z es el más sensible al "aplastamiento" del objeto.
-                                            # VACIO_CERRADO: Z ~ 1020
-                                            # CON_OBJETO / HOLDING: Z ~ 925 a 965
-                                            # UMBRAL FLEXIBLE Z: 980
-                                            if vals[2] < 980: 
+                                            # UMBRAL FLEXIBLE:
+                                            # 1. Ignorar el fallo temporal I2C (0.0) manteniendo el estado anterior.
+                                            # 2. Rango ULTRA AMPLIO: 500 a 1400 (Al girar el brazo, el campo magnético terrestre suma hasta +-200 a Z)
+                                            if vals[0] == 0.0 and vals[1] == 0.0 and vals[2] == 0.0:
+                                                pass # No actualizar el estado si la lectura falló
+                                            elif 500 <= vals[2] <= 1400: 
                                                 self.estado_pinza = "CON_OBJETO"
                                                 self.sujetando_objetivo = True
                                             else:
@@ -169,13 +169,14 @@ class ArmController:
                 
                 # Actualizar estado local
                 for p, a in necesarios: self.estado_actual[p] = a
-                
-                # Esperar confirmación para sincronizar movimientos largos
-                if esperar:
-                    if not self.event_ok.wait(timeout=10.0): # Timeout de seguridad más largo
-                        print("[BRAZO] Advertencia: Timeout esperando OK")
             except Exception as e:
                 print(f"ERROR SERIAL: {e}")
+                return
+
+        # Esperar confirmación para sincronizar movimientos largos (FUERA DEL LOCK)
+        if esperar:
+            if not self.event_ok.wait(timeout=10.0): # Timeout de seguridad más largo
+                print("[BRAZO] Advertencia: Timeout esperando OK")
 
     def centrar_ibvs(self, error_x, error_y, paso_x=1, paso_y=1):
         """Ajuste fino basado en visión (IBVS)."""

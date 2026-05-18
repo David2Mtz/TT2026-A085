@@ -6,7 +6,7 @@ import datetime
 # Definir la ruta absoluta basada en la ubicación de este archivo
 # para que siempre se guarde en la carpeta raíz del proyecto TT2026-A085
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FILE_NAME = os.path.join(BASE_DIR, "log_magnetometro.csv")
+FILE_NAME = os.path.join(BASE_DIR, "log_calibracion_dinamica.csv")
 
 def log_mag_data(x, y, z, success):
     """
