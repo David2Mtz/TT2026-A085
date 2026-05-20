@@ -12,7 +12,7 @@ from utils.flujo_camara import CameraSerial
 load_dotenv()
 
 def test_stream():
-    puerto = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
+    puerto = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
     print(f"--- INICIANDO PRUEBA DE CÁMARA EN {puerto} ---")
     
     camara = CameraSerial(port=puerto, baud_rate=460800)

@@ -33,6 +33,7 @@ class ArmController:
         self.max_lecturas = 5 # Promedio de 5 muestras para eliminar ruido
         
         self.evaluador_agarre = SujecionEvaluator()
+        self.nombre_estado_actual = "HOME" # Tracking de estado para compensación
         
         self.conectar()
         
@@ -128,7 +129,10 @@ class ArmController:
                                             self.evaluador_agarre.reset() # Resetear historial al abrir
                                         else:
                                             # Solo evaluamos magnetómetro si la pinza está en posición de cierre (< 80)
-                                            resultado_evaluacion = self.evaluador_agarre.evaluar_agarre(vals[0], vals[1], vals[2])
+                                            resultado_evaluacion = self.evaluador_agarre.evaluar_agarre(
+                                                vals[0], vals[1], vals[2], 
+                                                estado_actual=self.nombre_estado_actual
+                                            )
                                             if resultado_evaluacion == "CON_OBJETO":
                                                 self.estado_pinza = "CON_OBJETO"
                                                 self.sujetando_objetivo = True
@@ -248,6 +252,7 @@ class ArmController:
         """Mueve el brazo a una posición predefinida en posiciones.py."""
         if nombre_estado in POSICIONES:
             print(f"[BRAZO] Moviendo a estado: {nombre_estado}")
+            self.nombre_estado_actual = nombre_estado # Actualizar nombre para evaluador
             self.mover_tiempo(POSICIONES[nombre_estado], forzar=forzar, esperar=esperar)
         else:
             print(f"[BRAZO] Error: Estado '{nombre_estado}' no encontrado en posiciones.py")

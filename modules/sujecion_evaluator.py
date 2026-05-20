@@ -1,64 +1,53 @@
 # modules/sujecion_evaluator.py
 
 class SujecionEvaluator:
-    def __init__(self, umbral_flexibilidad=2, max_historial=12):
+    def __init__(self, umbral_tolerancia=35):
         """
-        Versión 3: Basada en la Magnitud del Vector (Norma).
-        Detecta que la magnitud disminuye cuando hay un objeto (bloqueo mecánico del imán).
+        Versión 4: Basada en Desviación Dinámica.
+        Compara la lectura actual contra una base capturada al cerrar la pinza.
         """
-        self.historial_estado = []
-        self.max_historial = max_historial
-        self.umbral_flexibilidad = umbral_flexibilidad
-        self.en_transporte = False # Estado "Sticky"
-
-    def evaluar_agarre(self, mag_x, mag_y, mag_z):
-        if mag_x == 0.0 and mag_y == 0.0 and mag_z == 0.0:
-            return None
-
-        # 1. Calcular Magnitud (Norma) del campo magnético
-        mag_norm = (mag_x**2 + mag_y**2 + mag_z**2)**0.5
+        self.baseline_recoleccion = None
+        self.en_transporte = False
+        self.umbral_tolerancia = umbral_tolerancia # Cuánto puede desviarse antes de marcar caída
         
-        es_objeto = False
-        
-        # --- LÓGICA DE UMBRALES DINÁMICOS (Calibrados por datos del usuario) ---
-        # Posición de Transporte / Recolección Alta (Z > 1000)
-        # VACIO: ~1460-1510 | OBJETO: ~1380-1445
-        if mag_z > 1000:
-            if mag_norm < 1455: 
-                es_objeto = True
-        
-        # Posición de Observación / Recolección Baja (Z < 1000)
-        # VACIO: ~1310 | OBJETO: ~1220
-        else:
-            if mag_norm < 1280:
-                es_objeto = True
+        # Compensación por movimiento (basado en tus datos de calibración)
+        # Cuánta "Norma" suma o resta el brazo naturalmente al ir a cada estado
+        self.compensacion_estado = {
+            "HOME": 0,
+            "OBSERVACION": 15,
+            "PRE_RECOLECCION": 20,
+            "OBSERVACION_MANIQUI": 120, # Sube mucho al girar a 170 grados
+            "ENTREGA": 90
+        }
 
-        # Regla de Oro: Si el Eje X es muy positivo, hay objeto 100%
-        if mag_x > -885:
-            es_objeto = True
+    def capturar_baseline(self, mag_x, mag_y, mag_z):
+        """ Se llama justo después de cerrar la pinza sobre la pastilla """
+        self.baseline_recoleccion = (mag_x**2 + mag_y**2 + mag_z**2)**0.5
+        self.en_transporte = True
+        print(f"[EVALUADOR] Baseline de transporte fijado en: {self.baseline_recoleccion:.1f}")
 
-        # 2. Gestión del Historial (Suavizado)
-        self.historial_estado.append(es_objeto)
-        if len(self.historial_estado) > self.max_historial:
-            self.historial_estado.pop(0)
+    def evaluar_agarre(self, mag_x, mag_y, mag_z, estado_actual="HOME"):
+        if self.baseline_recoleccion is None:
+            return "ABIERTA"
 
-        # 3. Decisión con Flexibilidad
-        # Si ya estábamos en transporte, somos EXTRA flexibles (Sticky)
-        votos_positivos = sum(self.historial_estado)
+        norma_actual = (mag_x**2 + mag_y**2 + mag_z**2)**0.5
         
-        # Umbral dinámico: 
-        # - Si ya creemos tener el objeto, solo necesitamos 1 voto positivo de 12 para mantenerlo.
-        # - Si estamos verificando por primera vez, necesitamos al menos 'umbral_flexibilidad' (2).
-        req = 1 if self.en_transporte else self.umbral_flexibilidad
+        # 1. Calcular compensación según donde esté el brazo
+        offset = self.compensacion_estado.get(estado_actual, 0)
         
-        if votos_positivos >= req:
-            self.en_transporte = True
+        # 2. Norma esperada si la pastilla SIGUE AHÍ
+        norma_esperada = self.baseline_recoleccion + offset
+        
+        # 3. Diferencia
+        desviacion = abs(norma_actual - norma_esperada)
+        
+        # Si la desviación es muy grande (ej. > 45), es que el imán saltó a posición de vacío
+        if desviacion < self.umbral_tolerancia:
             return "CON_OBJETO"
         else:
-            self.en_transporte = False
+            # Si se sale del umbral, hay sospecha de caída
             return "VACIA"
 
     def reset(self):
-        """ Limpia historial y estado sticky. """
-        self.historial_estado = []
+        self.baseline_recoleccion = None
         self.en_transporte = False

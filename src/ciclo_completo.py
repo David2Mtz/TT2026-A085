@@ -160,7 +160,7 @@ def main():
             elif estado_actual == Estado.OBSERVACION:
                 if not macro_movimiento_hecho:
                     iniciar_deteccion_pastillas(camara) # Luz inicial
-                    brazo.mover_a_estado("OBSERVACION")
+                    brazo.mover_a_estado("OBSERVACION") # Actualiza nombre_estado_actual
                     time.sleep(2) 
                     macro_movimiento_hecho = True
                 
@@ -338,6 +338,10 @@ def main():
                 print("[CONTROL] Cerrando pinza...")
                 brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
                 time.sleep(0.5)
+                
+                # --- NUEVO: CAPTURAR BASELINE INMEDIATAMENTE ---
+                m_init = brazo.mag1
+                brazo.evaluador_agarre.capturar_baseline(m_init[0], m_init[1], m_init[2])
                 
                 # 3. Levantar brazo
                 print("[CONTROL] Levantando brazo para verificación...")
