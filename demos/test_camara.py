@@ -15,7 +15,7 @@ def test_stream():
     puerto = os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
     print(f"--- INICIANDO PRUEBA DE CÁMARA EN {puerto} ---")
     
-    camara = CameraSerial(port=puerto, baud_rate=460800)
+    camara = CameraSerial(port=puerto, baud_rate=921600)
     
     if not camara.ser:
         print("[ERROR] No se pudo abrir el puerto serial. Revisa la conexión.")

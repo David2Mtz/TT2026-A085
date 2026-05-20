@@ -111,9 +111,24 @@ class CameraSerial:
                 # print(f"[Intento {intento+1}] Frame incompleto. Llegaron {len(img_data)} de {img_size} bytes.")
                 continue
 
-            # 4. Decodificar
-            frame_array = np.frombuffer(img_data, dtype=np.uint8)
-            frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+            # 4. Decodificar formato RGB565
+            frame = None
+            
+            # Verificamos si la cantidad de bytes corresponde a QVGA (320x240) o QQVGA (160x120)
+            if img_size == 153600:
+                width, height = 320, 240
+            elif img_size == 38400:
+                width, height = 160, 120
+            else:
+                # Si el tamaño no coincide, descartamos el frame corrupto
+                continue
+
+            # Leemos los datos como enteros de 16 bits para manipular el Endianness
+            # Luego volvemos a verlos como uint8 pero con la forma (H, W, 2) que OpenCV espera
+            frame_array = np.frombuffer(img_data, dtype=np.uint16).byteswap().view(np.uint8).reshape((height, width, 2))
+            
+            # Convertimos el formato crudo de 16-bits a BGR estándar de OpenCV de 24-bits
+            frame = cv2.cvtColor(frame_array, cv2.COLOR_BGR5652BGR)
 
             if frame is not None:
                 # --- Rotación de Imagen ---
@@ -124,7 +139,6 @@ class CameraSerial:
                 
                 return frame 
             else:
-                # print(f"[Intento {intento+1}] Error al decodificar la imagen.")
                 pass
                 
         return None

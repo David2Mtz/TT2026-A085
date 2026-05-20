@@ -24,7 +24,7 @@ const int ledResolution = 8;
 sensor_t * s; // Puntero para ajustes del sensor
 
 void setup() {
-  Serial.begin(460800); 
+  Serial.begin(921600); 
 
   ledcAttach(FLASH_GPIO_NUM, freq, ledResolution);
   ledcWrite(FLASH_GPIO_NUM, 0);
@@ -49,9 +49,9 @@ void setup() {
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
-  config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_VGA;
-  config.jpeg_quality = 12; // Calidad mejorada para detección
+  config.pixel_format = PIXFORMAT_RGB565;
+  config.frame_size = FRAMESIZE_QQVGA;
+  config.jpeg_quality = 15; // Calidad mejorada para detección
   config.fb_count = 1;
 
   esp_err_t err = esp_camera_init(&config);
@@ -63,7 +63,7 @@ void setup() {
   s->set_agc_gain(s, 1);       // Ganancia al mínimo (0-30)
   s->set_exposure_ctrl(s, 0);       // 0 = Exposición manual (CRÍTICO)
   
-  s->set_aec_value(s, 500);      // Valor inicial estándar
+  s->set_aec_value(s, 300);      // Valor inicial estándar
   
   s->set_sharpness(s, 2);
 
