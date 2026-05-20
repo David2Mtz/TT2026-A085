@@ -29,7 +29,7 @@ from modules.pastillas_detector import (
     process_pastillas_frame,
     iniciar_deteccion as iniciar_deteccion_pastillas,
     finalizar_deteccion as finalizar_deteccion_pastillas
-)
+    )
 from modules.detectarColor import process_color_frame
 from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, finalizar_deteccion
 from modules.auto_exposure import AutoExposureControl
@@ -45,7 +45,7 @@ load_dotenv()
 # ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Verde" 
+COLOR_OBJETIVO = "Azul" 
 
 from constants.config import OFFSET_X, OFFSET_Y
 
@@ -122,6 +122,18 @@ def main():
                 print("[SISTEMA] Entrando en modo EMERGENCIA...")
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
+
+            # --- DETECCIÓN DE CAÍDA ---
+            if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ESPERA_CONFIRMACION_ENTREGA]:
+                if brazo.estado_pinza == "VACIA":
+                    contador_caida += 1
+                    if contador_caida >= UMBRAL_PERSISTENCIA_CAIDA:
+                        print("\n!!! OBJETO PERDIDO (Confirmado tras múltiples lecturas) !!!")
+                        estado_actual = Estado.HOME
+                        macro_movimiento_hecho = False
+                        contador_caida = 0
+                else:
+                    contador_caida = 0 # Reset si recuperamos la lectura
             
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
@@ -148,7 +160,7 @@ def main():
             elif estado_actual == Estado.OBSERVACION:
                 if not macro_movimiento_hecho:
                     iniciar_deteccion_pastillas(camara) # Luz inicial
-                    brazo.mover_a_estado("OBSERVACION")
+                    brazo.mover_a_estado("OBSERVACION") # Actualiza nombre_estado_actual
                     time.sleep(2) 
                     macro_movimiento_hecho = True
                 
@@ -206,7 +218,7 @@ def main():
                         # --- PRIORIDAD X (Eje S0) ---
                         if abs(ex) > TOLERANCIA_CENTRADO:
                             # Paso fijo de 1 grado para mayor estabilidad
-                            paso_x = 1
+                            paso_x = 2
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
                         # --- EJE Y (S15 + S6) ---
@@ -327,29 +339,33 @@ def main():
                 brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
                 time.sleep(0.5)
                 
+                # --- NUEVO: CAPTURAR BASELINE INMEDIATAMENTE ---
+                m_init = brazo.mag1
+                brazo.evaluador_agarre.capturar_baseline(m_init[0], m_init[1], m_init[2])
+                
                 # 3. Levantar brazo
                 print("[CONTROL] Levantando brazo para verificación...")
                 brazo.mover_a_estado("PRE_RECOLECCION", esperar=True)
                 time.sleep(1.0)
                 
-                # 4. Capturar datos y preguntar al usuario
+                # 4. Verificación Automática (Magnetómetro con SujecionEvaluator)
                 m1 = brazo.mag1
-                print(f"\n[DATOS ACTUALES] X: {m1[0]:.1f}, Y: {m1[1]:.1f}, Z: {m1[2]:.1f}")
-                resultado = ask_user_success() # Esta función detiene el bucle y pregunta y/n
+                est_p = brazo.estado_pinza
+                print(f"\n[VERIFICACIÓN] Estado Pinza: {est_p} | Datos: X:{m1[0]:.1f}, Y:{m1[1]:.1f}, Z:{m1[2]:.1f}")
                 
-                # 5. Guardar en el nuevo CSV de calibración
-                etiqueta = "CON_OBJETO" if resultado == 'y' else "VACIO_CERRADO"
-                log_mag_data(m1[0], m1[1], m1[2], etiqueta)
-                
-                if resultado == 'y':
-                    print("[¡OK!] Procediendo a búsqueda de maniquí.")
+                if est_p == "CON_OBJETO":
+                    print("[¡ÉXITO!] Pastilla detectada automáticamente. Procediendo a búsqueda de maniquí.")
                     pastilla_en_transporte = True
                     estado_actual = Estado.OBSERVACION_MANIQUI
+                    # Loguear éxito para calibración continua si se desea
+                    log_mag_data(m1[0], m1[1], m1[2], "CON_OBJETO")
                 else:
-                    print("[REINTENTO] Abriendo pinza y regresando a observación.")
+                    print("[FALLO] No se detectó la pastilla. Abriendo pinza y reintentando...")
                     pastilla_en_transporte = False
                     brazo.mover_tiempo([(12, 80)], esperar=True) # Abrir
                     estado_actual = Estado.OBSERVACION
+                    # Loguear fallo para calibración continua si se desea
+                    log_mag_data(m1[0], m1[1], m1[2], "VACIO_CERRADO")
                 
                 macro_movimiento_hecho = False
 
@@ -420,7 +436,7 @@ def main():
                     if not lockon_activado_boca:
                         # Centrado Horizontal (S0)
                         if abs(ex) > 8:
-                            paso_x = 2 if abs(ex) > 60 else 1
+                            paso_x = 3 if abs(ex) > 60 else 2
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
                         # Centrado Vertical Dinámico (S15 + S6)

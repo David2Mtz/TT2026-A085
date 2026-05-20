@@ -4,6 +4,7 @@ import time
 import threading
 from dotenv import load_dotenv
 from constants.posiciones import POSICIONES
+from modules.sujecion_evaluator import SujecionEvaluator
 
 load_dotenv()
 
@@ -30,6 +31,9 @@ class ArmController:
         # Filtro para el sensor ToF
         self.lecturas_distancia = []
         self.max_lecturas = 5 # Promedio de 5 muestras para eliminar ruido
+        
+        self.evaluador_agarre = SujecionEvaluator()
+        self.nombre_estado_actual = "HOME" # Tracking de estado para compensación
         
         self.conectar()
         
@@ -122,17 +126,17 @@ class ArmController:
                                         if angulo_pinza >= 80:
                                             self.estado_pinza = "ABIERTA"
                                             self.sujetando_objetivo = False
+                                            self.evaluador_agarre.reset() # Resetear historial al abrir
                                         else:
                                             # Solo evaluamos magnetómetro si la pinza está en posición de cierre (< 80)
-                                            # UMBRAL FLEXIBLE:
-                                            # 1. Ignorar el fallo temporal I2C (0.0) manteniendo el estado anterior.
-                                            # 2. Rango ULTRA AMPLIO: 500 a 1400 (Al girar el brazo, el campo magnético terrestre suma hasta +-200 a Z)
-                                            if vals[0] == 0.0 and vals[1] == 0.0 and vals[2] == 0.0:
-                                                pass # No actualizar el estado si la lectura falló
-                                            elif 500 <= vals[2] <= 1400: 
+                                            resultado_evaluacion = self.evaluador_agarre.evaluar_agarre(
+                                                vals[0], vals[1], vals[2], 
+                                                estado_actual=self.nombre_estado_actual
+                                            )
+                                            if resultado_evaluacion == "CON_OBJETO":
                                                 self.estado_pinza = "CON_OBJETO"
                                                 self.sujetando_objetivo = True
-                                            else:
+                                            elif resultado_evaluacion == "VACIA":
                                                 self.estado_pinza = "VACIA"
                                                 self.sujetando_objetivo = False
                                 except: pass
@@ -248,6 +252,7 @@ class ArmController:
         """Mueve el brazo a una posición predefinida en posiciones.py."""
         if nombre_estado in POSICIONES:
             print(f"[BRAZO] Moviendo a estado: {nombre_estado}")
+            self.nombre_estado_actual = nombre_estado # Actualizar nombre para evaluador
             self.mover_tiempo(POSICIONES[nombre_estado], forzar=forzar, esperar=esperar)
         else:
             print(f"[BRAZO] Error: Estado '{nombre_estado}' no encontrado en posiciones.py")
