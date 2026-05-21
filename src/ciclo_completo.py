@@ -73,13 +73,14 @@ def main():
         print(f"[ERROR] No se pudo inicializar el hardware: {e}")
         return
 
-    auto_exp = AutoExposureControl(target_brightness=130)
-
     # --- CONFIGURACIÓN DE PARPADEO (Cámara Laptop) ---
     detector_parpadeo = BlinkDetector(target_blinks=2, window_time=3.0)
 
     estado_actual = Estado.HOME
     macro_movimiento_hecho = False
+    
+    # --- CONTROL DE CÁMARA (SIEMPRE ACTIVA) ---
+    camara_activa = True
     
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
     Z_UMBRAL_LOCKON = 120    
@@ -105,14 +106,20 @@ def main():
 
     try:
         while True:
-            frame = camara.get_frame()
-            if frame is None: continue
+            # Control de Encendido/Apagado lógico de la cámara
+            if camara_activa:
+                frame = camara.get_frame()
+                if frame is None: continue
+                frame_vis = frame.copy()
+            else:
+                # Mostrar frame de pausa si la cámara está apagada
+                frame_vis = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(frame_vis, "CAMARA APAGADA", (150, 240), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
+                frame = None
 
-            # Actualizar z_coord al inicio
+            # Actualizar z_coord al inicio (siempre leer ToF)
             dist_actual = brazo.obtener_distancia()
             z_coord = dist_actual
-
-            frame_vis = frame.copy()
             
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'): break
@@ -142,8 +149,9 @@ def main():
             if estado_actual == Estado.HOME:
                 lockon_activado = False
                 pastilla_en_transporte = False
+                camara_activa = False # APAGAR cámara al volver a casa
+                
                 if not macro_movimiento_hecho:
-                    auto_exp.target_brightness = 130 # Resetear brillo a estándar
                     brazo.mover_a_estado("HOME", forzar=True)
                     detector_parpadeo.start_cam() # Iniciar cámara de laptop en HOME
                     macro_movimiento_hecho = True
@@ -160,13 +168,15 @@ def main():
             elif estado_actual == Estado.OBSERVACION:
                 if not macro_movimiento_hecho:
                     iniciar_deteccion_pastillas(camara) # Luz inicial
-                    brazo.mover_a_estado("OBSERVACION") # Actualiza nombre_estado_actual
+                    brazo.mover_a_estado("OBSERVACION") # Mover a posición de pastillas
                     time.sleep(2) 
+                    # LLEGAMOS: Ahora sí prendemos cámara
+                    camara_activa = True 
                     macro_movimiento_hecho = True
                 
-                # Ajuste autónomo de luz
-                auto_exp.update(frame, camara)
-                
+                # Evitar crash si camara no dio frame aún
+                if frame is None: continue
+
                 # Obtener colores y sus centros
                 frame_vis, colores, info_colores = process_color_frame(frame_vis)
                 
@@ -201,11 +211,11 @@ def main():
                             fase_sondeo_color = "DERECHA"
 
             elif estado_actual == Estado.RECOLECCION:
-                # Ajuste autónomo constante durante la recolección
-                auto_exp.update(frame, camara)
+                if frame is None: continue
                 
                 # Intentar segmentación fina de la pastilla
                 frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
+
                 
                 # Obtener detección de color como respaldo
                 _, colores_backup, info_colores_backup = process_color_frame(frame.copy())
@@ -371,17 +381,18 @@ def main():
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
                 if not macro_movimiento_hecho:
+                    camara_activa = False # APAGAR CAMARA MIENTRAS VIAJA
                     print("[CONTROL] Yendo a posición de entrega (Maniquí)...")
                     iniciar_deteccion(camara)
                     # Forzar movimiento completo con espera
                     brazo.mover_a_estado("OBSERVACION_MANIQUI", forzar=True, esperar=True)
                     time.sleep(0.5)
+                    # LLEGAMOS AL MANIQUÍ: Prender
+                    camara_activa = True
                     macro_movimiento_hecho = True
                     lockon_activado_boca = False
                 
-                # Ajuste autónomo de luz para la boca (Brillo menor para evitar sobreexposición)
-                auto_exp.target_brightness = 90
-                auto_exp.update(frame, camara)
+                if frame is None: continue
 
                 # Rotar frame para el maniquí
                 frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
@@ -399,9 +410,7 @@ def main():
                     cv2.putText(frame_vis, "Buscando boca (Frame Rotado)...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
             elif estado_actual == Estado.SEGUIMIENTO_BOCA:
-                # Ajuste autónomo continuo para la boca (Mantener brillo bajo)
-                auto_exp.target_brightness = 90
-                auto_exp.update(frame, camara)
+                if frame is None: continue
 
                 # Rotar frame para el maniquí
                 frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
