@@ -67,7 +67,7 @@ def main():
     print("--- INICIANDO CICLO COMPLETO (AUTOMÁTICO) ---")
     
     try:
-        camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
+        camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=921600)
         brazo = ArmController(puerto=PUERTO_BRAZO, baudios=115200)
     except Exception as e:
         print(f"[ERROR] No se pudo inicializar el hardware: {e}")
@@ -117,9 +117,15 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'): break
 
-            # --- DETECCIÓN DE EMERGENCIA ---
+            # --- DETECCIÓN DE EMERGENCIA FÍSICA ---
             if brazo.en_emergencia and estado_actual != Estado.EMERGENCIA:
                 print("[SISTEMA] Entrando en modo EMERGENCIA...")
+                estado_actual = Estado.EMERGENCIA
+                macro_movimiento_hecho = False
+
+            # --- DETECCIÓN DE COLISIÓN (RF-08) ---
+            if brazo.estado_pinza == "COLISION" and estado_actual != Estado.EMERGENCIA:
+                print("\n!!! ALERTA: COLISIÓN / IMPACTO DETECTADO EN LA PINZA !!!")
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
 

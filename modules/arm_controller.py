@@ -126,19 +126,18 @@ class ArmController:
                                         if angulo_pinza >= 80:
                                             self.estado_pinza = "ABIERTA"
                                             self.sujetando_objetivo = False
-                                            self.evaluador_agarre.reset() # Resetear historial al abrir
+                                            self.evaluador_agarre.reset() 
                                         else:
-                                            # Solo evaluamos magnetómetro si la pinza está en posición de cierre (< 80)
-                                            resultado_evaluacion = self.evaluador_agarre.evaluar_agarre(
+                                            # 1. Obtener estado de presencia (CON_OBJETO / VACIA)
+                                            resultado_presencia = self.evaluador_agarre.evaluar_agarre(
                                                 vals[0], vals[1], vals[2], 
                                                 estado_actual=self.nombre_estado_actual
                                             )
-                                            if resultado_evaluacion == "CON_OBJETO":
-                                                self.estado_pinza = "CON_OBJETO"
-                                                self.sujetando_objetivo = True
-                                            elif resultado_evaluacion == "VACIA":
-                                                self.estado_pinza = "VACIA"
-                                                self.sujetando_objetivo = False
+                                            self.estado_pinza = resultado_presencia
+                                            self.sujetando_objetivo = (resultado_presencia == "CON_OBJETO")
+                                            
+                                            # 2. Sincronizar flag de colisión independiente
+                                            self.colision_detectada = self.evaluador_agarre.hubo_colision
                                 except: pass
                         buffer = lineas[-1]
                 time.sleep(0.005)

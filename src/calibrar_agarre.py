@@ -106,8 +106,15 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'): break
 
+            # --- DETECCIÓN DE EMERGENCIA FÍSICA ---
             if brazo.en_emergencia and estado_actual != Estado.EMERGENCIA:
                 print("[SISTEMA] Entrando en modo EMERGENCIA...")
+                estado_actual = Estado.EMERGENCIA
+                macro_movimiento_hecho = False
+
+            # --- DETECCIÓN DE COLISIÓN (RF-08) ---
+            if brazo.estado_pinza == "COLISION" and estado_actual != Estado.EMERGENCIA:
+                print("\n!!! ALERTA: COLISIÓN / IMPACTO DETECTADO EN LA PINZA !!!")
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
 
