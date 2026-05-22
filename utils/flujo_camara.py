@@ -10,11 +10,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class CameraSerial:
-    def __init__(self, port=None, baud_rate=460800):
+    def __init__(self, port=None, baud_rate=None):
         self.port = port or os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
-        self.baud_rate = baud_rate
+        self.baud_rate = baud_rate or int(os.getenv('BAUD_CAMARA', 460800))
         self.ser = None
-        self.last_brightness = -1 
         
         # Ajustes de imagen manuales (Neutrales)
         self.contrast = 1.0   
@@ -26,9 +25,11 @@ class CameraSerial:
         print(f"Intentando abrir puerto serial de cámara: {self.port} a {self.baud_rate}...")
         try:
             print("   [DEBUG] Abriendo objeto Serial...")
-            self.ser = serial.Serial(self.port, self.baud_rate, timeout=1.0)
-            print("   [DEBUG] Puerto abierto, esperando 2s para estabilización...")
-            time.sleep(2) 
+            self.ser = serial.Serial(self.port, self.baud_rate, timeout=2.0)
+            self.ser.setDTR(True)
+            self.ser.setRTS(True)
+            print("   [DEBUG] Puerto abierto, esperando 3s para estabilización...")
+            time.sleep(3) 
             self.ser.reset_input_buffer() 
             print("Cámara XIAO ESP32-S3 conectada exitosamente.")
         except Exception as e:
@@ -55,22 +56,34 @@ class CameraSerial:
             return None
 
         for intento in range(max_intentos):
-            self.ser.write(b'R')
+            # Limpiar antes de pedir
+            if self.ser.in_waiting > 10000:
+                self.ser.reset_input_buffer()
+                
+            self.ser.write(b'R\n')
             self.ser.flush()
 
             # 1. Esperar la cabecera
+            # Usamos read_until pero con un timeout interno más corto para no bloquear
             sync = self.ser.read_until(b'IMG:')
             if not sync.endswith(b'IMG:'):
-                self.ser.reset_input_buffer()
+                if sync:
+                    try:
+                        decoded = sync.decode(errors='ignore').strip()
+                        if decoded:
+                            print(f"DEBUG: Recibido texto en lugar de imagen: {decoded}")
+                    except:
+                        print(f"DEBUG: Recibido basura binaria ({len(sync)} bytes)")
                 continue
 
             # 2. Leer el tamaño
             size_bytes = self.ser.read(4)
             if len(size_bytes) != 4:
+                print("DEBUG: Error al leer tamaño (bytes incompletos)")
                 continue
             
             img_size = struct.unpack('<I', size_bytes)[0]
-            if img_size == 0 or img_size > 500000: 
+            if img_size == 0 or img_size > 1000000: # Aumentamos límite para RGB VGA (614,400 bytes)
                 continue
 
             # 3. Leer bytes por trozos
@@ -92,8 +105,16 @@ class CameraSerial:
             frame = None
             if img_data[0] == 0xFF and img_data[1] == 0xD8: # JPEG
                 frame = cv2.imdecode(np.frombuffer(img_data, dtype=np.uint8), cv2.IMREAD_COLOR)
-            elif img_size == 153600: # RGB565 fallback
+            elif img_size == 153600: # RGB565 QVGA (320x240)
                 width, height = 320, 240
+                frame_array = np.frombuffer(img_data, dtype=np.uint16).byteswap().view(np.uint8).reshape((height, width, 2))
+                frame = cv2.cvtColor(frame_array, cv2.COLOR_BGR5652BGR)
+            elif img_size == 236800: # RGB565 CIF (400x296)
+                width, height = 400, 296
+                frame_array = np.frombuffer(img_data, dtype=np.uint16).byteswap().view(np.uint8).reshape((height, width, 2))
+                frame = cv2.cvtColor(frame_array, cv2.COLOR_BGR5652BGR)
+            elif img_size == 614400: # RGB565 VGA (640x480)
+                width, height = 640, 480
                 frame_array = np.frombuffer(img_data, dtype=np.uint16).byteswap().view(np.uint8).reshape((height, width, 2))
                 frame = cv2.cvtColor(frame_array, cv2.COLOR_BGR5652BGR)
 
@@ -102,14 +123,6 @@ class CameraSerial:
                 frame = self.apply_image_adjustments(frame)
                 return frame 
         return None
-
-    def set_led_brightness(self, level):
-        if not self.ser or not self.ser.is_open: return
-        level = max(0, min(255, int(level)))
-        if level == self.last_brightness: return
-        self.ser.write(b'L' + struct.pack('B', level))
-        self.ser.flush()
-        self.last_brightness = level
 
     def liberar(self):
         if self.ser and self.ser.is_open:

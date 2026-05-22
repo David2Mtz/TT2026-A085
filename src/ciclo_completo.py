@@ -25,13 +25,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
-from modules.pastillas_detector import (
-    process_pastillas_frame,
-    iniciar_deteccion as iniciar_deteccion_pastillas,
-    finalizar_deteccion as finalizar_deteccion_pastillas
-    )
+from modules.pastillas_detector import process_pastillas_frame
 from modules.detectarColor import process_color_frame
-from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, finalizar_deteccion
+from modules.detectorBoca import get_mouth_coordinates
 from modules.auto_exposure import AutoExposureControl
 from modules.blinkDetector import BlinkDetector
 from constants.posiciones import POSICIONES
@@ -67,7 +63,7 @@ def main():
     print("--- INICIANDO CICLO COMPLETO (AUTOMÁTICO) ---")
     
     try:
-        camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=921600)
+        camara = CameraSerial(port=PUERTO_CAMARA, baud_rate=460800)
         brazo = ArmController(puerto=PUERTO_BRAZO, baudios=115200)
     except Exception as e:
         print(f"[ERROR] No se pudo inicializar el hardware: {e}")
@@ -102,10 +98,28 @@ def main():
     contador_caida = 0
     UMBRAL_PERSISTENCIA_CAIDA = 15 # Requiere ~1.5 segundos de "VACIA" para confirmar caída
     
+    # --- VARIABLES DE TIEMPO PARA MOVIMIENTO ---
+    last_move_time = 0
+    INTERVALO_MOVIMIENTO = 0.2 # Mínimo 100ms entre comandos de movimiento suave
+
+    # --- FILTRO DE PERSISTENCIA (DETECCIÓN) ---
+    persistencia_deteccion = 0
+    UMBRAL_PERSISTENCIA_DETECCION = 5 # Frames seguidos viendo la pastilla para confiar
+    
+    # --- VARIABLES PARA MOVIMIENTO PULSADO (S0) ---
+    s0_base_angle = 90
+    s0_pulse_offset = 0
+    s0_pulse_state = "RETURNING" # "PULSING" o "RETURNING"
+    frame_count_stable = 0
+    last_ex_val = 0
+    UMBRAL_CAMBIO_ERROR = 5 # Píxeles de cambio para considerar que hubo movimiento
+
     print("Sistema listo. Parpadea 2 veces para iniciar el ciclo.")
+
 
     try:
         while True:
+            ahora = time.time()
             # Control de Encendido/Apagado lógico de la cámara
             if camara_activa:
                 frame = camara.get_frame()
@@ -138,7 +152,7 @@ def main():
 
             # --- DETECCIÓN DE CAÍDA ---
             if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ESPERA_CONFIRMACION_ENTREGA]:
-                if brazo.estado_pinza == "VACIA":
+                if brazo.estado_pinza == "VACIA" and pastilla_en_transporte:
                     contador_caida += 1
                     if contador_caida >= UMBRAL_PERSISTENCIA_CAIDA:
                         print("\n!!! OBJETO PERDIDO (Confirmado tras múltiples lecturas) !!!")
@@ -173,7 +187,6 @@ def main():
 
             elif estado_actual == Estado.OBSERVACION:
                 if not macro_movimiento_hecho:
-                    iniciar_deteccion_pastillas(camara) # Luz inicial
                     brazo.mover_a_estado("OBSERVACION") # Mover a posición de pastillas
                     time.sleep(2) 
                     # LLEGAMOS: Ahora sí prendemos cámara
@@ -199,8 +212,10 @@ def main():
                     if fase_sondeo_color == "DERECHA":
                         # Mover hacia la derecha hasta el límite (140 grados)
                         if brazo.estado_actual[0] < 140:
-                            nuevo_s0 = brazo.estado_actual[0] + 1
-                            brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
+                            if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
+                                nuevo_s0 = brazo.estado_actual[0] + 1
+                                brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
+                                last_move_time = ahora
                         else:
                             # Límite izquierdo alcanzado, cambiar a derecha
                             print("[SONDEO] Límite derecho alcanzado. Cambiando a izquierda.")
@@ -209,8 +224,10 @@ def main():
                     elif fase_sondeo_color == "IZQUIERDA":
                         # Mover hacia la izquierda hasta el límite (40 grados)
                         if brazo.estado_actual[0] > 40:
-                            nuevo_s0 = brazo.estado_actual[0] - 1
-                            brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
+                            if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
+                                nuevo_s0 = brazo.estado_actual[0] - 1
+                                brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
+                                last_move_time = ahora
                         else:
                             # Límite derecho alcanzado, reiniciar a izquierda
                             print("[SONDEO] Límite izquierdo alcanzado. Reiniciando sondeo.")
@@ -218,6 +235,10 @@ def main():
 
             elif estado_actual == Estado.RECOLECCION:
                 if frame is None: continue
+                
+                # Inicializar variables de error y targets para evitar UnboundLocalError
+                ex, ey = 0, 0
+                targets = {}
                 
                 # Intentar segmentación fina de la pastilla
                 frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
@@ -227,27 +248,69 @@ def main():
                 _, colores_backup, info_colores_backup = process_color_frame(frame.copy())
                 
                 if info or lockon_activado:
-                    ex, ey, area = info if info else (0, 0, 0)
-                    targets = {} 
-                    
+                    # Aplicar filtro de persistencia temporal
                     if not lockon_activado:
-                        # --- PRIORIDAD X (Eje S0) ---
-                        if abs(ex) > TOLERANCIA_CENTRADO:
-                            # Paso fijo de 1 grado para mayor estabilidad
-                            paso_x = 2
-                            targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
+                        persistencia_deteccion += 1
+                        if persistencia_deteccion < UMBRAL_PERSISTENCIA_DETECCION:
+                            cv2.putText(frame_vis, f"FILTRANDO RUIDO ({persistencia_deteccion}/{UMBRAL_PERSISTENCIA_DETECCION})", (10, 60), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                            info = None # Ignorar detección hasta que sea estable
+                    
+                    if info or lockon_activado:
+                        ex, ey, area = info if info else (0, 0, 0)
+                        targets = {} 
                         
-                        # --- EJE Y (S15 + S6) ---
-                        angulo_15 = brazo.estado_actual[15]
-                        angulo_6 = brazo.estado_actual[6]
-                        if abs(ey) > 10:
-                            if ey > 0: # Abajo -> Extender
-                                if angulo_15 < 180: angulo_15 += 1
-                                else: targets[6] = angulo_6 + 1
-                            else:      # Arriba -> Retraer
-                                if angulo_15 > 10: angulo_15 -= 1
-                                else: targets[6] = max(20, angulo_6 - 1)
-                        if angulo_15 != brazo.estado_actual[15]: targets[15] = angulo_15
+                        if not lockon_activado:
+                            # --- NUEVA LÓGICA PULSADA PARA EJE X (S0) ---
+                            if abs(ex) > TOLERANCIA_CENTRADO:
+                                # Verificar si el error cambió significativamente
+                                if abs(ex - last_ex_val) > UMBRAL_CAMBIO_ERROR:
+                                    frame_count_stable += 1
+                                else:
+                                    frame_count_stable = 0
+                                last_ex_val = ex
+
+                                # Si el error cambió durante 8 frames, nos detenemos y recalculamos base
+                                if frame_count_stable >= 8:
+                                    print(f"[S0] Cambio detectado. Nueva base: {brazo.estado_actual[0]}")
+                                    s0_base_angle = brazo.estado_actual[0]
+                                    s0_pulse_offset = 0
+                                    s0_pulse_state = "RETURNING"
+                                    frame_count_stable = 0
+
+                                # Lógica de pulsos (Base -> Pulso -> Base -> Pulso+1...)
+                                if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
+                                    if s0_pulse_state == "RETURNING":
+                                        # Paso 1: Ir a la base
+                                        targets[0] = s0_base_angle
+                                        s0_pulse_state = "PULSING"
+                                        # Incrementar el offset para el siguiente pulso (MAX 25 grados)
+                                        if abs(s0_pulse_offset) < 25:
+                                            s0_pulse_offset += 1 if ex > 0 else -1
+                                    else:
+                                        # Paso 2: Dar el pulso
+                                        targets[0] = s0_base_angle + s0_pulse_offset
+                                        s0_pulse_state = "RETURNING"
+                                    # Quitamos el last_move_time de aquí para que otros servos 
+                                    # puedan usar el intervalo global de forma independiente
+                            else:
+                                # Centrado: Resetear lógica de pulsos
+                                s0_base_angle = brazo.estado_actual[0]
+                                s0_pulse_offset = 0
+                                frame_count_stable = 0
+
+                            # --- EJE Y (S15 + S6) ---
+
+                            angulo_15 = brazo.estado_actual[15]
+                            angulo_6 = brazo.estado_actual[6]
+                            if abs(ey) > 10:
+                                if ey > 0: # Abajo -> Extender
+                                    if angulo_15 < 180: angulo_15 += 1
+                                    else: targets[6] = angulo_6 + 1
+                                else:      # Arriba -> Retraer
+                                    if angulo_15 > 10: angulo_15 -= 1
+                                    else: targets[6] = max(20, angulo_6 - 1)
+                            if angulo_15 != brazo.estado_actual[15]: targets[15] = angulo_15
 
                     # Lógica de Descenso
                     if z_coord > Z_UMBRAL_LOCKON:
@@ -284,7 +347,7 @@ def main():
                         # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
                         # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
                         FINAL_CORRECTION_S0 = 0  # Grados extra para centrar X
-                        FINAL_CORRECTION_S15 = 3 # Grados extra para centrar Y (hacia arriba)
+                        FINAL_CORRECTION_S15 = 5 # Grados extra para centrar Y (hacia arriba)
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
                         brazo.mover_tiempo([
@@ -293,12 +356,29 @@ def main():
                         ])
 
                         estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
-                        finalizar_deteccion_pastillas(camara)
                         macro_movimiento_hecho = False
 
                     
                     if targets:
-                        brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                        # Preparamos los movimientos para enviar en un solo comando serial si es posible
+                        movimientos_finales = []
+                        
+                        # Manejo de S0 (Pulsado)
+                        if 0 in targets:
+                            movimientos_finales.append((0, targets[0]))
+                        
+                        # Manejo del resto de servos (S15, S6, S1)
+                        otros_targets = [(p, a) for p, a in targets.items() if p != 0]
+                        
+                        if movimientos_finales or (otros_targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO):
+                            # Combinamos todo en un envío para reducir latencia serial
+                            # solo si ha pasado el tiempo para los servos secundarios
+                            if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
+                                movimientos_finales.extend(otros_targets)
+                                last_move_time = ahora
+                            
+                            if movimientos_finales:
+                                brazo.mover_tiempo(movimientos_finales, esperar=False)
                     
                     # Resetear contadores si hay detección o lock-on
                     contador_pastilla_perdida = 0
@@ -317,13 +397,15 @@ def main():
                     if abs(ey_b) > 20:
                         targets[15] = brazo.estado_actual[15] + (1 if ey_b > 0 else -1)
                     
-                    if targets:
+                    if targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
                         brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                        last_move_time = ahora
                     
                     cv2.putText(frame_vis, f"Aproximando a {COLOR_OBJETIVO}...", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 else:
+                    persistencia_deteccion = 0
                     # LÓGICA DE RECUPERACIÓN (Si perdemos la pastilla)
                     contador_pastilla_perdida += 1
                     
@@ -386,10 +468,12 @@ def main():
                 macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
+                # Inicializar variables de error
+                ex, ey = 0, 0
+                
                 if not macro_movimiento_hecho:
                     camara_activa = False # APAGAR CAMARA MIENTRAS VIAJA
                     print("[CONTROL] Yendo a posición de entrega (Maniquí)...")
-                    iniciar_deteccion(camara)
                     # Forzar movimiento completo con espera
                     brazo.mover_a_estado("OBSERVACION_MANIQUI", forzar=True, esperar=True)
                     time.sleep(0.5)
@@ -418,6 +502,9 @@ def main():
             elif estado_actual == Estado.SEGUIMIENTO_BOCA:
                 if frame is None: continue
 
+                # Inicializar variables de error para evitar UnboundLocalError
+                ex, ey = 0, 0
+                
                 # Rotar frame para el maniquí
                 frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
                 frame_vis = frame_rotated.copy()
@@ -484,12 +571,12 @@ def main():
                     # 3. Condición de Parada Final (150mm)
                     if z_coord <= Z_LIMITE_ENTREGA:
                         print(f"[ToF] POSICION DE ENTREGA ALCANZADA ({z_coord}mm).")
-                        finalizar_deteccion(camara)
                         estado_actual = Estado.ESPERA_CONFIRMACION_ENTREGA
                         macro_movimiento_hecho = False
 
-                    if targets:
+                    if targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
                         brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                        last_move_time = ahora
                 
                 else:
                     # LÓGICA DE SONDEO (Si perdemos la boca)
@@ -497,8 +584,10 @@ def main():
                     
                     if contador_sondeo < 100: # Dar más tiempo al sondeo lento
                         # Sondeo lateral oscilante (S0) más lento para evitar desenfoque
-                        offset = 8 * np.sin(contador_sondeo * 0.15)
-                        brazo.mover_tiempo([(0, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
+                        if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
+                            offset = int(8 * np.sin(contador_sondeo * 0.15))
+                            brazo.mover_tiempo([(0, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
+                            last_move_time = ahora
                         cv2.putText(frame_vis, "SONDEO DE BOCA...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     else:
                         print("[CONTROL] Boca perdida tras sondeo. Regresando a Observación.")
@@ -582,7 +671,6 @@ def main():
     finally:
         print("\nApagando...")
         try:
-            if camara: camara.set_led_brightness(0)
             # Agregamos esperar=True para que el movimiento suave se complete antes de cerrar
             brazo.mover_a_estado("HOME", forzar=True, esperar=True)
             brazo.cerrar()
