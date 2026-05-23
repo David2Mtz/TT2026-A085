@@ -5,7 +5,7 @@
 POSICIONES = {
     # Se llama en el estado: INICIO_HOME y al terminar SOLTAR
     "HOME": [
-        (0, 90),   # Base
+        (4, 90),   # Base
         (1, 180), # Hombro 180 HOME 90 PARADO
         (6, 140), # Codo
         (15, 90),  # Muñeca (Pitch) 0 HACIA ARRIBA, 180 HACIA ABAJO
@@ -16,7 +16,7 @@ POSICIONES = {
     # Se llama en el estado: OBSERVAR_COLORES
     # Posición alta para que la cámara vea toda la zona de pastilleros
     "OBSERVACION": [
-        (0, 90),   # Base (Frente)
+        (4, 90),   # Base (Frente)
         (6, 60),  # Codo flexionado para apuntar la cámara
         (1, 70),  # Hombro inclinado sobrela mesa
         (15, 170), # Muñeca (Pitch) apuntando hacia abajo
@@ -39,9 +39,10 @@ POSICIONES = {
         (6, 105), 
         (15, 70),    # Muñeca (Pitch)
         (1, 140), # Posición hacia la cara del usuario
-        (8, 180), # ROTACIÓN 90 PARA MIRAR AL FRENTE
+        (8, 0), # MANTENER NIVELADO PARA MIRAR AL FRENTE (Sin invertir)
         (12, 0)     # Pinza (Cerrada)
     ],
+
 
     # Se llama en el estado: ENTREGA
     "ENTREGA": [
@@ -49,7 +50,7 @@ POSICIONES = {
         (6, 120), 
         (15, 90),    # Muñeca (Pitch)
         (1, 140), # Posición hacia la cara del usuario
-        (8, 0), # ROTACIÓN 180 PARA MIRAR AL FRENTE
+        (8, 0), # ROTACIÓN 180 PARA MIRAR AL FRENTE (Mismo que OBSERVACION_MANIQUI)
         (12, 0)     # Pinza (Cerrada)
     ]
     }

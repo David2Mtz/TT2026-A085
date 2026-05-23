@@ -76,7 +76,7 @@ void setup() {
     s->set_exposure_ctrl(s, 0);    // Opciones: 1 (Auto), 0 (Manual).
 
     // Establece el tiempo de exposición manualmente (solo si set_exposure_ctrl es 0).
-    s -> set_aec_value(s, 700); // Opciones: 0 a 1200 (Aproximadamente, depende del sensor). Valores más altos = más luz pero más desenfoque de movimiento.
+    s -> set_aec_value(s, 220); // Opciones: 0 a 1200 (Aproximadamente, depende del sensor). Valores más altos = más luz pero más desenfoque de movimiento.
     
     //Ajusta el "objetivo" de brillo que el modo automático intenta alcanzar.
     //s->set_ae_level(s, 1);       //Opciones: -2, -1, 0, 1, 2.
@@ -93,7 +93,7 @@ void setup() {
     // Determina la fidelidad de los colores y la temperatura (frío/cálido).
 
     //Activa el Balance de Blancos Automático (AWB).
-    s->set_whitebal(s, 0);  // Opciones: 1 (Auto), 0 (Manual).
+    s->set_whitebal(s, 1);  // Opciones: 1 (Auto), 0 (Manual).
     //Presets de temperatura de color (solo si set_whitebal es 1).
     //s->set_wb_mode(s,0); //Opciones: 0: Auto * 1: Sunny (Soleado) * 2: Cloudy (Nublado) * 3: Office (Luz de oficina/Fluorescente) * 4: Home (Luz de casa/Incandescente) 
     // Determina si el hardware puede aplicar ganancia a los canales de color por separado.

@@ -10,16 +10,6 @@ from imutils import face_utils
 import imutils
 from dotenv import load_dotenv
 
-# ... (rest of imports)
-
-#------definir función para calcular el EAR-----------#
-def calculate_EAR(eye):
-    y1 = dist.euclidean(eye[1], eye[5])
-    y2 = dist.euclidean(eye[2], eye[4])
-    x1 = dist.euclidean(eye[0], eye[3])
-    EAR = (y1 + y2) / x1
-    return EAR
-
 # Corrección de ruta para importar módulos desde la raíz del proyecto
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -32,20 +22,14 @@ from modules.auto_exposure import AutoExposureControl
 from modules.blinkDetector import BlinkDetector
 from constants.posiciones import POSICIONES
 from modules.mag_logger import log_mag_data, ask_user_success # Importar logger
+from constants.config import BOCA_OFFSET_X, BOCA_OFFSET_Y, BOCA_COMP_FACTOR
 
 # Cargar variables de entorno
 load_dotenv()
 
-# ===============================================================
-# --- CONFIGURACIÓN PRINCIPAL ---
-# ===============================================================
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = "Azul" 
-
-from constants.config import OFFSET_X, OFFSET_Y
-
-from constants.config import OFFSET_X, OFFSET_Y
+COLOR_OBJETIVO = os.getenv('COLOR_OBJETIVO', 'Azul')
 
 class Estado:
     HOME = "HOME"
@@ -58,6 +42,7 @@ class Estado:
     ENTREGA = "ENTREGA"
     ESPERA_CONFIRMACION_ENTREGA = "ESPERA_CONFIRMACION_ENTREGA"
     EMERGENCIA = "EMERGENCIA"
+    REINTENTO_OBJETO = "REINTENTO_OBJETO"
 
 def main():
     print("--- INICIANDO CICLO COMPLETO (AUTOMÁTICO) ---")
@@ -73,6 +58,7 @@ def main():
     detector_parpadeo = BlinkDetector(target_blinks=2, window_time=3.0)
 
     estado_actual = Estado.HOME
+    estado_previo_caida = Estado.HOME
     macro_movimiento_hecho = False
     
     # --- CONTROL DE CÁMARA (SIEMPRE ACTIVA) ---
@@ -106,24 +92,29 @@ def main():
     persistencia_deteccion = 0
     UMBRAL_PERSISTENCIA_DETECCION = 5 # Frames seguidos viendo la pastilla para confiar
     
-    # --- VARIABLES PARA MOVIMIENTO PULSADO (S0) ---
-    s0_base_angle = 90
-    s0_pulse_offset = 0
-    s0_pulse_state = "RETURNING" # "PULSING" o "RETURNING"
-    frame_count_stable = 0
-    last_ex_val = 0
-    UMBRAL_CAMBIO_ERROR = 5 # Píxeles de cambio para considerar que hubo movimiento
-
     print("Sistema listo. Parpadea 2 veces para iniciar el ciclo.")
 
 
     try:
         while True:
             ahora = time.time()
+            
+            # --- POLLING DE TECLADO SIEMPRE ACTIVO ---
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'): 
+                print("[SISTEMA] 'Q' presionada. Saliendo...")
+                break
+
             # Control de Encendido/Apagado lógico de la cámara
             if camara_activa:
                 frame = camara.get_frame()
-                if frame is None: continue
+                if frame is None:
+                    # Mantener ventana viva si no hay frame
+                    frame_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
+                    cv2.putText(frame_placeholder, "ESPERANDO CAMARA...", (150, 240), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
+                    cv2.imshow('Ciclo Autonomo Inteligente', frame_placeholder)
+                    continue
                 frame_vis = frame.copy()
             else:
                 # Mostrar frame de pausa si la cámara está apagada
@@ -135,9 +126,6 @@ def main():
             dist_actual = brazo.obtener_distancia()
             z_coord = dist_actual
             
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'): break
-
             # --- DETECCIÓN DE EMERGENCIA FÍSICA ---
             if brazo.en_emergencia and estado_actual != Estado.EMERGENCIA:
                 print("[SISTEMA] Entrando en modo EMERGENCIA...")
@@ -152,15 +140,17 @@ def main():
 
             # --- DETECCIÓN DE CAÍDA ---
             if estado_actual in [Estado.OBSERVACION_MANIQUI, Estado.SEGUIMIENTO_BOCA, Estado.ESPERA_CONFIRMACION_ENTREGA]:
-                if brazo.estado_pinza == "VACIA" and pastilla_en_transporte:
+                # Ignorar si el brazo está en movimiento o si la pinza está abierta
+                if brazo.estado_pinza == "VACIA" and pastilla_en_transporte and not brazo.busy:
                     contador_caida += 1
                     if contador_caida >= UMBRAL_PERSISTENCIA_CAIDA:
-                        print("\n!!! OBJETO PERDIDO (Confirmado tras múltiples lecturas) !!!")
-                        estado_actual = Estado.HOME
+                        print("\n!!! POSIBLE OBJETO PERDIDO (Confirmado tras múltiples lecturas) !!!")
+                        estado_previo_caida = estado_actual
+                        estado_actual = Estado.REINTENTO_OBJETO
                         macro_movimiento_hecho = False
                         contador_caida = 0
                 else:
-                    contador_caida = 0 # Reset si recuperamos la lectura
+                    contador_caida = 0 # Reset si recuperamos la lectura o si está busy
             
             # =================================================
             # --- MÁQUINA DE ESTADOS ---
@@ -210,26 +200,24 @@ def main():
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     
                     if fase_sondeo_color == "DERECHA":
-                        # Mover hacia la derecha hasta el límite (140 grados)
-                        if brazo.estado_actual[0] < 140:
+                        # Mover hacia la derecha (ahora restando ángulo)
+                        if brazo.estado_actual[4] > 40:
                             if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                                nuevo_s0 = brazo.estado_actual[0] + 1
-                                brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
+                                nuevo_s0 = brazo.estado_actual[4] - 1
+                                brazo.mover_tiempo([(4, nuevo_s0)], esperar=False)
                                 last_move_time = ahora
                         else:
-                            # Límite izquierdo alcanzado, cambiar a derecha
                             print("[SONDEO] Límite derecho alcanzado. Cambiando a izquierda.")
                             fase_sondeo_color = "IZQUIERDA"
                     
                     elif fase_sondeo_color == "IZQUIERDA":
-                        # Mover hacia la izquierda hasta el límite (40 grados)
-                        if brazo.estado_actual[0] > 40:
+                        # Mover hacia la izquierda (ahora sumando ángulo)
+                        if brazo.estado_actual[4] < 140:
                             if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                                nuevo_s0 = brazo.estado_actual[0] - 1
-                                brazo.mover_tiempo([(0, nuevo_s0)], esperar=False)
+                                nuevo_s0 = brazo.estado_actual[4] + 1
+                                brazo.mover_tiempo([(4, nuevo_s0)], esperar=False)
                                 last_move_time = ahora
                         else:
-                            # Límite derecho alcanzado, reiniciar a izquierda
                             print("[SONDEO] Límite izquierdo alcanzado. Reiniciando sondeo.")
                             fase_sondeo_color = "DERECHA"
 
@@ -261,56 +249,32 @@ def main():
                         targets = {} 
                         
                         if not lockon_activado:
-                            # --- NUEVA LÓGICA PULSADA PARA EJE X (S0) ---
-                            if abs(ex) > TOLERANCIA_CENTRADO:
-                                # Verificar si el error cambió significativamente
-                                if abs(ex - last_ex_val) > UMBRAL_CAMBIO_ERROR:
-                                    frame_count_stable += 1
-                                else:
-                                    frame_count_stable = 0
-                                last_ex_val = ex
-
-                                # Si el error cambió durante 8 frames, nos detenemos y recalculamos base
-                                if frame_count_stable >= 8:
-                                    print(f"[S0] Cambio detectado. Nueva base: {brazo.estado_actual[0]}")
-                                    s0_base_angle = brazo.estado_actual[0]
-                                    s0_pulse_offset = 0
-                                    s0_pulse_state = "RETURNING"
-                                    frame_count_stable = 0
-
-                                # Lógica de pulsos (Base -> Pulso -> Base -> Pulso+1...)
-                                if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                                    if s0_pulse_state == "RETURNING":
-                                        # Paso 1: Ir a la base
-                                        targets[0] = s0_base_angle
-                                        s0_pulse_state = "PULSING"
-                                        # Incrementar el offset para el siguiente pulso (MAX 25 grados)
-                                        if abs(s0_pulse_offset) < 25:
-                                            s0_pulse_offset += 1 if ex > 0 else -1
-                                    else:
-                                        # Paso 2: Dar el pulso
-                                        targets[0] = s0_base_angle + s0_pulse_offset
-                                        s0_pulse_state = "RETURNING"
-                                    # Quitamos el last_move_time de aquí para que otros servos 
-                                    # puedan usar el intervalo global de forma independiente
-                            else:
-                                # Centrado: Resetear lógica de pulsos
-                                s0_base_angle = brazo.estado_actual[0]
-                                s0_pulse_offset = 0
-                                frame_count_stable = 0
+                            # --- CENTRADO EJE X (S4) ---
+                            s4_needs_move = abs(ex) > TOLERANCIA_CENTRADO
+                            if s4_needs_move:
+                                # INVERTIDO: si ex > 0 (objetivo a la derecha), restamos ángulo
+                                targets[4] = brazo.estado_actual[4] + (-1 if ex > 0 else 1)
 
                             # --- EJE Y (S15 + S6) ---
-
-                            angulo_15 = brazo.estado_actual[15]
-                            angulo_6 = brazo.estado_actual[6]
-                            if abs(ey) > 10:
-                                if ey > 0: # Abajo -> Extender
-                                    if angulo_15 < 180: angulo_15 += 1
-                                    else: targets[6] = angulo_6 + 1
-                                else:      # Arriba -> Retraer
-                                    if angulo_15 > 10: angulo_15 -= 1
-                                    else: targets[6] = max(20, angulo_6 - 1)
-                            if angulo_15 != brazo.estado_actual[15]: targets[15] = angulo_15
+                            # Condición de movimiento vertical:
+                            # 1. Si Z < 130 (centrado final), NO bajar si la base se está moviendo (Exclusión mutua)
+                            # 2. Si Z > 130, permitir bajar si el error X es razonable (< 40)
+                            if z_coord < 130:
+                                can_move_vertical = not s4_needs_move
+                            else:
+                                can_move_vertical = abs(ex) < 40
+                            
+                            if can_move_vertical:
+                                angulo_15 = brazo.estado_actual[15]
+                                angulo_6 = brazo.estado_actual[6]
+                                if abs(ey) > 10:
+                                    if ey > 0: # Abajo -> Extender
+                                        if angulo_15 < 180: angulo_15 += 1
+                                        else: targets[6] = angulo_6 + 1
+                                    else:      # Arriba -> Retraer
+                                        if angulo_15 > 10: angulo_15 -= 1
+                                        else: targets[6] = max(20, angulo_6 - 1)
+                                if angulo_15 != brazo.estado_actual[15]: targets[15] = angulo_15
 
                     # Lógica de Descenso
                     if z_coord > Z_UMBRAL_LOCKON:
@@ -351,7 +315,7 @@ def main():
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
                         brazo.mover_tiempo([
-                            (0, brazo.estado_actual[0] + FINAL_CORRECTION_S0),
+                            (4, brazo.estado_actual[4] + FINAL_CORRECTION_S0),
                             (15, brazo.estado_actual[15] + FINAL_CORRECTION_S15)
                         ])
 
@@ -364,11 +328,11 @@ def main():
                         movimientos_finales = []
                         
                         # Manejo de S0 (Pulsado)
-                        if 0 in targets:
-                            movimientos_finales.append((0, targets[0]))
+                        if 4 in targets:
+                            movimientos_finales.append((4, targets[4]))
                         
                         # Manejo del resto de servos (S15, S6, S1)
-                        otros_targets = [(p, a) for p, a in targets.items() if p != 0]
+                        otros_targets = [(p, a) for p, a in targets.items() if p != 4]
                         
                         if movimientos_finales or (otros_targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO):
                             # Combinamos todo en un envío para reducir latencia serial
@@ -393,13 +357,20 @@ def main():
                     targets = {}
                     # Movimiento suave hacia el color detectado
                     if abs(ex_b) > 20:
-                        targets[0] = brazo.estado_actual[0] + (1 if ex_b > 0 else -1)
-                    if abs(ey_b) > 20:
+                        # INVERTIDO: si ex_b > 0, restamos ángulo. Paso aumentado a 2.
+                        targets[4] = brazo.estado_actual[4] + (-2 if ex_b > 0 else 2)
+                    
+                    # PRIORIDAD: Solo bajar si estamos relativamente centrados horizontalmente
+                    if abs(ex_b) < 30 and abs(ey_b) > 10:
                         targets[15] = brazo.estado_actual[15] + (1 if ey_b > 0 else -1)
                     
                     if targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
                         brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
                         last_move_time = ahora
+                    
+                    # RESETEAR contadores de pérdida si el respaldo ve el color
+                    contador_pastilla_perdida = 0
+                    recuperacion_pastilla_intentada = False
                     
                     cv2.putText(frame_vis, f"Aproximando a {COLOR_OBJETIVO}...", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
@@ -484,9 +455,8 @@ def main():
                 
                 if frame is None: continue
 
-                # Rotar frame para el maniquí
-                frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
-                frame_vis = frame_rotated.copy()
+                # Ya no rotamos el frame para el maniquí
+                frame_vis = frame.copy()
                 
                 # Centro objetivo visual (Punto azul)
                 cv_h, cv_w = frame_vis.shape[:2]
@@ -497,7 +467,8 @@ def main():
                     estado_actual = Estado.SEGUIMIENTO_BOCA
                     macro_movimiento_hecho = False
                 else:
-                    cv2.putText(frame_vis, "Buscando boca (Frame Rotado)...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+                    cv2.putText(frame_vis, "Buscando boca...", (10, 60), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
             elif estado_actual == Estado.SEGUIMIENTO_BOCA:
                 if frame is None: continue
@@ -505,9 +476,8 @@ def main():
                 # Inicializar variables de error para evitar UnboundLocalError
                 ex, ey = 0, 0
                 
-                # Rotar frame para el maniquí
-                frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
-                frame_vis = frame_rotated.copy()
+                # Ya no rotamos el frame
+                frame_vis = frame.copy()
                 
                 # Centro objetivo visual (Punto azul)
                 cv_h, cv_w = frame_vis.shape[:2]
@@ -519,36 +489,28 @@ def main():
                     # Resetear contador de sondeo si vemos la boca
                     contador_sondeo = 0
                     
-                    # Error con frame rotado
-                    ex_raw = coords_boca[0] - (frame_vis.shape[1] // 2)
-                    ey_raw = coords_boca[1] - (frame_vis.shape[0] // 2)
+                    # Errores en frame corregido + Offsets
+                    ex = coords_boca[0] - (frame_vis.shape[1] // 2) + BOCA_OFFSET_X
+                    ey_raw = coords_boca[1] - (frame_vis.shape[0] // 2) + BOCA_OFFSET_Y
                     
-                    # En OBSERVACION_MANIQUI S0 está cerca de 5. 
-                    # Si el frame está rotado 180, la izquierda física es la derecha del frame.
-                    # Para centrar, si ex_raw es positivo (derecha del frame/izquierda física), 
-                    # debemos aumentar S0 para ir hacia la izquierda (asumiendo que S0 crece hacia la izquierda).
-                    ex = ex_raw 
-                    # S15: 0 mira hacia arriba, 180 hacia abajo.
-                    # Si la boca está debajo del centro (ey_raw > 0), queremos bajar la cámara,
-                    # por lo que S15 debe aumentar. Usamos ey_raw directo.
-                    ey = ey_raw 
-                    
+                    # --- COMPENSACIÓN DINÁMICA DE ALTURA (Y) ---
+                    dist_factor = max(0, Z_UMBRAL_LOCKON - z_coord)
+                    offset_y_compensacion = int(dist_factor * BOCA_COMP_FACTOR) 
+                    ey = ey_raw + offset_y_compensacion 
+
                     targets = {} 
                     
                     if not lockon_activado_boca:
                         # Centrado Horizontal (S0)
                         if abs(ex) > 8:
                             paso_x = 3 if abs(ex) > 60 else 2
-                            targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
+                            # INVERTIDO: si ex > 0 (objetivo a la derecha visual), restamos ángulo
+                            targets[4] = brazo.estado_actual[4] + (-paso_x if ex > 0 else paso_x)
                         
                         # Centrado Vertical Dinámico (S15 + S6)
                         if abs(ey) > 10:
-                            # S15: Ajuste fino de inclinación
-                            paso_y = 1
-                            targets[15] = brazo.estado_actual[15] + (paso_y if ey > 0 else -paso_y)
-                            
-                            # S6: Compensación de altura del antebrazo (S6 aumenta para bajar)
-                            # Solo corregimos con S6 si el error es significativo para no oscilar
+                            # S15: 0 arriba, 180 abajo. Si ey > 0 (objetivo abajo), sumamos.
+                            targets[15] = brazo.estado_actual[15] + (1 if ey > 0 else -1)
                             if abs(ey) > 30:
                                 targets[6] = brazo.estado_actual[6] + (1 if ey > 0 else -1)
 
@@ -559,7 +521,6 @@ def main():
                             targets[1] = brazo.estado_actual[1] - 1
                         
                         # S6: Ayuda a la extensión solo si la boca está centrada verticalmente
-                        # Si ey > 0 (boca abajo), detenemos la extensión de S6 para que el hombro S1 baje más
                         if 6 not in targets and brazo.estado_actual[6] > 0:
                             targets[6] = brazo.estado_actual[6] - 1
                         
@@ -568,7 +529,7 @@ def main():
                                 print("[CONTROL] Lock-On Boca ACTIVADO.")
                                 lockon_activado_boca = True
 
-                    # 3. Condición de Parada Final (150mm)
+                    # 3. Condición de Parada Final
                     if z_coord <= Z_LIMITE_ENTREGA:
                         print(f"[ToF] POSICION DE ENTREGA ALCANZADA ({z_coord}mm).")
                         estado_actual = Estado.ESPERA_CONFIRMACION_ENTREGA
@@ -579,16 +540,27 @@ def main():
                         last_move_time = ahora
                 
                 else:
-                    # LÓGICA DE SONDEO (Si perdemos la boca)
+                    # LÓGICA DE SONDEO / RECUPERACIÓN (Si perdemos la boca)
                     contador_sondeo += 1
                     
-                    if contador_sondeo < 100: # Dar más tiempo al sondeo lento
-                        # Sondeo lateral oscilante (S0) más lento para evitar desenfoque
+                    if contador_sondeo < 30: 
+                        # --- RECUPERACIÓN HACIA ARRIBA ---
+                        if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
+                            nuevo_s15 = max(0, brazo.estado_actual[15] - 2)
+                            brazo.mover_tiempo([(15, nuevo_s15)], esperar=False)
+                            last_move_time = ahora
+                        cv2.putText(frame_vis, "RECUPERANDO (MIRANDO ARRIBA)...", (10, 60), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    
+                    elif contador_sondeo < 100:
+                        # Sondeo lateral oscilante (S0)
                         if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
                             offset = int(8 * np.sin(contador_sondeo * 0.15))
-                            brazo.mover_tiempo([(0, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
+                            brazo.mover_tiempo([(4, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
                             last_move_time = ahora
-                        cv2.putText(frame_vis, "SONDEO DE BOCA...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                        cv2.putText(frame_vis, "SONDEO DE BOCA...", (10, 60), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    
                     else:
                         print("[CONTROL] Boca perdida tras sondeo. Regresando a Observación.")
                         estado_actual = Estado.OBSERVACION_MANIQUI
@@ -596,9 +568,8 @@ def main():
                         contador_sondeo = 0
 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_ENTREGA:
-                # Mantener el frame rotado para consistencia visual
-                frame_rotated = cv2.rotate(frame, cv2.ROTATE_180)
-                frame_vis = frame_rotated.copy()
+                # Ya no rotamos el frame para consistencia visual
+                frame_vis = frame.copy()
                 
                 cv2.putText(frame_vis, "ENTREGA LISTA - Confirma con 'c'", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 
@@ -638,6 +609,23 @@ def main():
                 
                 if not brazo.en_emergencia:
                     print("[SISTEMA] Emergencia liberada. Regresando a HOME.")
+                    estado_actual = Estado.HOME
+                    macro_movimiento_hecho = False
+
+            elif estado_actual == Estado.REINTENTO_OBJETO:
+                cv2.rectangle(frame_vis, (0, 0), (frame_vis.shape[1], frame_vis.shape[0]), (0, 165, 255), 8)
+                cv2.putText(frame_vis, "ALERTA: OBJETO NO DETECTADO", (50, 150), cv2.FONT_HERSHEY_DUPLEX, 1.0, (0, 165, 255), 2)
+                cv2.putText(frame_vis, "'R' RE-CALIBRAR | 'Q' ABORTAR (HOME)", (70, 200), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                
+                if key == ord('r'):
+                    print("[RECUPERACIÓN] Re-calibrando sujeción con valores actuales...")
+                    m1 = brazo.mag1
+                    brazo.evaluador_agarre.capturar_baseline(m1[0], m1[1], m1[2])
+                    estado_actual = estado_previo_caida
+                    # Forzamos False para que repita el movimiento macro si estaba en OBSERVACION_MANIQUI
+                    macro_movimiento_hecho = False 
+                elif key == ord('q'):
+                    print("[SISTEMA] Abortando ciclo por pérdida de objeto.")
                     estado_actual = Estado.HOME
                     macro_movimiento_hecho = False
 

@@ -14,7 +14,7 @@ class SujecionEvaluator:
 
         self.compensacion_estado = {
             "HOME": 0, "OBSERVACION": 15, "PRE_RECOLECCION": 20,
-            "OBSERVACION_MANIQUI": 120, "ENTREGA": 90
+            "OBSERVACION_MANIQUI": 15, "ENTREGA": 15
         }
 
     def capturar_baseline(self, mag_x, mag_y, mag_z):

@@ -18,6 +18,8 @@ class CameraSerial:
         # Ajustes de imagen manuales (Neutrales)
         self.contrast = 1.0   
         self.saturation = 1.0 
+        self.green_gain = 0.9 # Reducir verdes para evitar falsos positivos en sombras
+        self.blue_gain = 0.9  # Reducir azules para balancear la imagen
         
         self.conectar()
 
@@ -37,11 +39,27 @@ class CameraSerial:
             self.ser = None
             
     def apply_image_adjustments(self, frame):
-        """ Aplica contraste y saturación de forma manual """
+        """ Aplica contraste, saturación y balance de blancos de forma manual """
         if frame is None:
             return None
+
+        # 1. Compensación de Tinte (Balance de Color Manual)
+        if self.green_gain != 1.0 or self.blue_gain != 1.0:
+            # Separar canales (BGR)
+            b, g, r = cv2.split(frame)
+            # Escalar canal verde si es necesario
+            if self.green_gain != 1.0:
+                g = (g.astype("float32") * self.green_gain).clip(0, 255).astype("uint8")
+            # Escalar canal azul si es necesario
+            if self.blue_gain != 1.0:
+                b = (b.astype("float32") * self.blue_gain).clip(0, 255).astype("uint8")
+            frame = cv2.merge([b, g, r])
+
+        # 2. Contraste
         if self.contrast != 1.0:
             frame = cv2.convertScaleAbs(frame, alpha=self.contrast, beta=0)
+
+        # 3. Saturación
         if self.saturation != 1.0:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype("float32")
             (h, s, v) = cv2.split(hsv)
@@ -49,6 +67,7 @@ class CameraSerial:
             s = np.clip(s, 0, 255)
             hsv = cv2.merge([h, s, v])
             frame = cv2.cvtColor(hsv.astype("uint8"), cv2.COLOR_HSV2BGR)
+            
         return frame
 
     def get_frame(self, max_intentos=3):

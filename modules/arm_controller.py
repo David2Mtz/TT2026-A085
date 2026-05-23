@@ -13,7 +13,7 @@ class ArmController:
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial sincronizado con el firmware
-        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 8: 0, 12: 80}
+        self.estado_actual = {4: 90, 1: 180, 2: 0, 6: 140, 15: 90, 8: 0, 12: 80}
         self.distancia = 999
         self.mag1 = [0.0, 0.0, 0.0]
         self.mag2 = [0.0, 0.0, 0.0]
@@ -21,6 +21,7 @@ class ArmController:
         self.esp32 = None
         self.running = True
         self.en_emergencia = False  # Nueva variable de estado
+        self.busy = False # Flag para indicar movimiento en curso
         self.lock = threading.Lock()
         self.event_ok = threading.Event() # Evento para esperar el 'OK'
         
@@ -149,6 +150,8 @@ class ArmController:
             print("[BRAZO] Comando ignorado: El sistema está en PARO DE EMERGENCIA.")
             return
 
+        with self.lock: self.busy = True
+
         necesarios = []
         for p, a in movimientos:
             # Límite extendido para el Pin 13 (Roll), 180 para los demás
@@ -180,6 +183,8 @@ class ArmController:
         if esperar:
             if not self.event_ok.wait(timeout=10.0): # Timeout de seguridad más largo
                 print("[BRAZO] Advertencia: Timeout esperando OK")
+        
+        with self.lock: self.busy = False
 
     def centrar_ibvs(self, error_x, error_y, paso_x=1, paso_y=1):
         """Ajuste fino basado en visión (IBVS)."""
@@ -188,8 +193,8 @@ class ArmController:
             return True
             
         cmds = []
-        if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso_x))
-        elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso_x))
+        if error_x > tolerancia: cmds.append((4, self.estado_actual[4] - paso_x))
+        elif error_x < -tolerancia: cmds.append((4, self.estado_actual[4] + paso_x))
         
         if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso_y))
         elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso_y))
@@ -216,8 +221,8 @@ class ArmController:
             paso_x = 1 if error_x > 0 else -1
 
         if abs(error_x) > tolerancia:
-            nuevo_angulo = self.estado_actual[0] + paso_x
-            cmds.append((0, nuevo_angulo))
+            nuevo_angulo = self.estado_actual[4] - paso_x
+            cmds.append((4, nuevo_angulo))
 
         paso_y = int(error_y * kp_y)
         if abs(paso_y) > max_paso:
