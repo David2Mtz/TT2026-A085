@@ -162,12 +162,12 @@ def main():
                     cv2.putText(frame_vis, f"Sondeando {COLOR_OBJETIVO} ({fase_sondeo_color})...", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                     if fase_sondeo_color == "DERECHA":
-                        if brazo.estado_actual[0] < 140:
-                            brazo.mover_tiempo([(0, brazo.estado_actual[0] + 1)], esperar=False)
+                        if brazo.estado_actual[4] < 140:
+                            brazo.mover_tiempo([(4, brazo.estado_actual[4] + 1)], esperar=False)
                         else: fase_sondeo_color = "IZQUIERDA"
                     elif fase_sondeo_color == "IZQUIERDA":
-                        if brazo.estado_actual[0] > 40:
-                            brazo.mover_tiempo([(0, brazo.estado_actual[0] - 1)], esperar=False)
+                        if brazo.estado_actual[4] > 40:
+                            brazo.mover_tiempo([(4, brazo.estado_actual[4] - 1)], esperar=False)
                         else: fase_sondeo_color = "DERECHA"
 
             elif estado_actual == Estado.RECOLECCION:
@@ -182,7 +182,7 @@ def main():
                     if not lockon_activado:
                         if abs(ex) > TOLERANCIA_CENTRADO:
                             paso_x = 1 if abs(ex) > 10 else 0.5
-                            targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
+                            targets[4] = brazo.estado_actual[4] + (paso_x if ex > 0 else -paso_x)
                         
                         angulo_15 = brazo.estado_actual[15]
                         angulo_6 = brazo.estado_actual[6]
@@ -219,7 +219,7 @@ def main():
                         FINAL_CORRECTION_S0 = -2  
                         FINAL_CORRECTION_S15 = 0 
                         brazo.mover_tiempo([
-                            (0, brazo.estado_actual[0] + FINAL_CORRECTION_S0),
+                            (4, brazo.estado_actual[4] + FINAL_CORRECTION_S0),
                             (15, brazo.estado_actual[15] + FINAL_CORRECTION_S15)
                         ])
                         estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
@@ -236,7 +236,7 @@ def main():
                     ex_b = cx - (frame_vis.shape[1] // 2)
                     ey_b = cy - (frame_vis.shape[0] // 2)
                     targets = {}
-                    if abs(ex_b) > 20: targets[0] = brazo.estado_actual[0] + (1 if ex_b > 0 else -1)
+                    if abs(ex_b) > 20: targets[4] = brazo.estado_actual[4] + (1 if ex_b > 0 else -1)
                     if abs(ey_b) > 20: targets[15] = brazo.estado_actual[15] + (1 if ey_b > 0 else -1)
                     if targets: brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
                 
@@ -313,7 +313,7 @@ def main():
                     if not lockon_activado_boca:
                         if abs(ex) > 8:
                             paso_x = 2 if abs(ex) > 60 else 1
-                            targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
+                            targets[4] = brazo.estado_actual[4] + (paso_x if ex > 0 else -paso_x)
                         if abs(ey) > 10:
                             targets[15] = brazo.estado_actual[15] + (1 if ey > 0 else -1)
                             if abs(ey) > 30:
@@ -336,7 +336,7 @@ def main():
                     contador_sondeo += 1
                     if contador_sondeo < 100:
                         offset = 8 * np.sin(contador_sondeo * 0.15)
-                        brazo.mover_tiempo([(0, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
+                        brazo.mover_tiempo([(4, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
                     else:
                         estado_actual = Estado.OBSERVACION_MANIQUI
                         macro_movimiento_hecho = False

@@ -5,6 +5,9 @@ import threading
 from dotenv import load_dotenv
 from constants.posiciones import POSICIONES
 from modules.sujecion_evaluator import SujecionEvaluator
+from constants.config import (
+    PIN_BASE, PIN_HOMBRO, PIN_CODO, PIN_MUÑECA, PIN_ROTADOR, PIN_PINZA
+)
 
 load_dotenv()
 
@@ -13,7 +16,15 @@ class ArmController:
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial sincronizado con el firmware
-        self.estado_actual = {4: 90, 1: 180, 2: 0, 6: 140, 15: 90, 8: 0, 12: 80}
+        self.estado_actual = {
+            PIN_BASE: 90, 
+            PIN_HOMBRO: 180, 
+            2: 0, 
+            PIN_CODO: 140, 
+            PIN_MUÑECA: 90, 
+            PIN_ROTADOR: 0, 
+            PIN_PINZA: 80
+        }
         self.distancia = 999
         self.mag1 = [0.0, 0.0, 0.0]
         self.mag2 = [0.0, 0.0, 0.0]
@@ -120,9 +131,9 @@ class ArmController:
                                     with self.lock:
                                         self.mag1 = vals
                                         
-                                        # PRIORIDAD: Verificar el ángulo del servo de la pinza (Pin 12)
+                                        # PRIORIDAD: Verificar el ángulo del servo de la pinza
                                         # Si la pinza está abierta (>= 80), no puede estar "CON_OBJETO"
-                                        angulo_pinza = self.estado_actual.get(12, 80)
+                                        angulo_pinza = self.estado_actual.get(PIN_PINZA, 80)
                                         
                                         if angulo_pinza >= 80:
                                             self.estado_pinza = "ABIERTA"
@@ -193,11 +204,11 @@ class ArmController:
             return True
             
         cmds = []
-        if error_x > tolerancia: cmds.append((4, self.estado_actual[4] - paso_x))
-        elif error_x < -tolerancia: cmds.append((4, self.estado_actual[4] + paso_x))
+        if error_x > tolerancia: cmds.append((PIN_BASE, self.estado_actual[PIN_BASE] - paso_x))
+        elif error_x < -tolerancia: cmds.append((PIN_BASE, self.estado_actual[PIN_BASE] + paso_x))
         
-        if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso_y))
-        elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso_y))
+        if error_y > tolerancia: cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] + paso_y))
+        elif error_y < -tolerancia: cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] - paso_y))
         
         if cmds: self.mover_tiempo(cmds, esperar=False) # No esperamos OK en IBVS para mayor velocidad
         return False
@@ -221,8 +232,8 @@ class ArmController:
             paso_x = 1 if error_x > 0 else -1
 
         if abs(error_x) > tolerancia:
-            nuevo_angulo = self.estado_actual[4] - paso_x
-            cmds.append((4, nuevo_angulo))
+            nuevo_angulo = self.estado_actual[PIN_BASE] - paso_x
+            cmds.append((PIN_BASE, nuevo_angulo))
 
         paso_y = int(error_y * kp_y)
         if abs(paso_y) > max_paso:
@@ -232,13 +243,13 @@ class ArmController:
 
         if abs(error_y) > tolerancia:
             self.intentos_y += 1
-            nuevo_angulo_15 = self.estado_actual[15] + paso_y
-            cmds.append((15, nuevo_angulo_15))
+            nuevo_angulo_15 = self.estado_actual[PIN_MUÑECA] + paso_y
+            cmds.append((PIN_MUÑECA, nuevo_angulo_15))
             
             if self.intentos_y >= 5:
                 paso_6 = 1 if error_y > 0 else -1
-                nuevo_angulo_6 = self.estado_actual[6] + paso_6
-                cmds.append((6, nuevo_angulo_6))
+                nuevo_angulo_6 = self.estado_actual[PIN_CODO] + paso_6
+                cmds.append((PIN_CODO, nuevo_angulo_6))
                 self.intentos_y = 0 
         else:
             self.intentos_y = 0

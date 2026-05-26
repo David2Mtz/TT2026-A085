@@ -22,12 +22,15 @@ from modules.auto_exposure import AutoExposureControl
 from modules.blinkDetector import BlinkDetector
 from constants.posiciones import POSICIONES
 from modules.mag_logger import log_mag_data, ask_user_success # Importar logger
-from constants.config import BOCA_OFFSET_X, BOCA_OFFSET_Y, BOCA_COMP_FACTOR
+from constants.config import (
+    BOCA_OFFSET_X, BOCA_OFFSET_Y, BOCA_COMP_FACTOR,
+    PIN_BASE, PIN_HOMBRO, PIN_CODO, PIN_MUÑECA, PIN_ROTADOR, PIN_PINZA
+)
 
 # Cargar variables de entorno
 load_dotenv()
 
-PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
+PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyACM0')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
 COLOR_OBJETIVO = os.getenv('COLOR_OBJETIVO', 'Azul')
 
@@ -92,8 +95,23 @@ def main():
     persistencia_deteccion = 0
     UMBRAL_PERSISTENCIA_DETECCION = 5 # Frames seguidos viendo la pastilla para confiar
     
+    # --- VARIABLES DE VELOCIDAD Y SEGURIDAD ---
+    last_z = 0
+    last_z_time = time.time()
+    velocidad_z = 0.0
+    VELOCIDAD_LIMITE = 250.0 # mm/s
+    DISTANCIA_SEGURIDAD = 300.0 # mm (30 cm)
+
     print("Sistema listo. Parpadea 2 veces para iniciar el ciclo.")
 
+    # --- NUEVO: CALIBRACIÓN INICIAL DE VACÍO ---
+    print("\n[CALIBRACIÓN] Calibrando sensor de sujeción (vacío)...")
+    brazo.mover_tiempo([(PIN_PINZA, 0)], forzar=True, esperar=True)
+    time.sleep(1.0)
+    m_vacio = brazo.mag1
+    brazo.evaluador_agarre.registrar_vacio(m_vacio[0], m_vacio[1], m_vacio[2])
+    brazo.mover_tiempo([(PIN_PINZA, 80)], forzar=True, esperar=True)
+    print("[CALIBRACIÓN] Listo.\n")
 
     try:
         while True:
@@ -125,6 +143,16 @@ def main():
             # Actualizar z_coord al inicio (siempre leer ToF)
             dist_actual = brazo.obtener_distancia()
             z_coord = dist_actual
+
+            # --- CÁLCULO DE VELOCIDAD (mm/s) ---
+            dt = ahora - last_z_time
+            if dt >= 0.05: # Calcular cada 50ms mínimo para estabilidad
+                # Velocidad positiva = acercándose al objetivo
+                velocidad_z = (last_z - dist_actual) / dt
+                # Suavizado básico (Promedio ponderado opcional si es muy ruidoso)
+                # velocidad_z = (velocidad_z * 0.7) + (((last_z - dist_actual) / dt) * 0.3)
+                last_z = dist_actual
+                last_z_time = ahora
             
             # --- DETECCIÓN DE EMERGENCIA FÍSICA ---
             if brazo.en_emergencia and estado_actual != Estado.EMERGENCIA:
@@ -201,10 +229,10 @@ def main():
                     
                     if fase_sondeo_color == "DERECHA":
                         # Mover hacia la derecha (ahora restando ángulo)
-                        if brazo.estado_actual[4] > 40:
+                        if brazo.estado_actual[PIN_BASE] > 40:
                             if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                                nuevo_s0 = brazo.estado_actual[4] - 1
-                                brazo.mover_tiempo([(4, nuevo_s0)], esperar=False)
+                                nuevo_s0 = brazo.estado_actual[PIN_BASE] - 1
+                                brazo.mover_tiempo([(PIN_BASE, nuevo_s0)], esperar=False)
                                 last_move_time = ahora
                         else:
                             print("[SONDEO] Límite derecho alcanzado. Cambiando a izquierda.")
@@ -212,10 +240,10 @@ def main():
                     
                     elif fase_sondeo_color == "IZQUIERDA":
                         # Mover hacia la izquierda (ahora sumando ángulo)
-                        if brazo.estado_actual[4] < 140:
+                        if brazo.estado_actual[PIN_BASE] < 140:
                             if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                                nuevo_s0 = brazo.estado_actual[4] + 1
-                                brazo.mover_tiempo([(4, nuevo_s0)], esperar=False)
+                                nuevo_s0 = brazo.estado_actual[PIN_BASE] + 1
+                                brazo.mover_tiempo([(PIN_BASE, nuevo_s0)], esperar=False)
                                 last_move_time = ahora
                         else:
                             print("[SONDEO] Límite izquierdo alcanzado. Reiniciando sondeo.")
@@ -249,13 +277,13 @@ def main():
                         targets = {} 
                         
                         if not lockon_activado:
-                            # --- CENTRADO EJE X (S4) ---
+                            # --- CENTRADO EJE X (PIN_BASE) ---
                             s4_needs_move = abs(ex) > TOLERANCIA_CENTRADO
                             if s4_needs_move:
                                 # INVERTIDO: si ex > 0 (objetivo a la derecha), restamos ángulo
-                                targets[4] = brazo.estado_actual[4] + (-1 if ex > 0 else 1)
+                                targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-1 if ex > 0 else 1)
 
-                            # --- EJE Y (S15 + S6) ---
+                            # --- EJE Y (PIN_MUÑECA + PIN_CODO) ---
                             # Condición de movimiento vertical:
                             # 1. Si Z < 130 (centrado final), NO bajar si la base se está moviendo (Exclusión mutua)
                             # 2. Si Z > 130, permitir bajar si el error X es razonable (< 40)
@@ -265,23 +293,23 @@ def main():
                                 can_move_vertical = abs(ex) < 40
                             
                             if can_move_vertical:
-                                angulo_15 = brazo.estado_actual[15]
-                                angulo_6 = brazo.estado_actual[6]
+                                angulo_15 = brazo.estado_actual[PIN_MUÑECA]
+                                angulo_6 = brazo.estado_actual[PIN_CODO]
                                 if abs(ey) > 10:
                                     if ey > 0: # Abajo -> Extender
                                         if angulo_15 < 180: angulo_15 += 1
-                                        else: targets[6] = angulo_6 + 1
+                                        else: targets[PIN_CODO] = angulo_6 + 1
                                     else:      # Arriba -> Retraer
                                         if angulo_15 > 10: angulo_15 -= 1
-                                        else: targets[6] = max(20, angulo_6 - 1)
-                                if angulo_15 != brazo.estado_actual[15]: targets[15] = angulo_15
+                                        else: targets[PIN_CODO] = max(20, angulo_6 - 1)
+                                if angulo_15 != brazo.estado_actual[PIN_MUÑECA]: targets[PIN_MUÑECA] = angulo_15
 
                     # Lógica de Descenso
                     if z_coord > Z_UMBRAL_LOCKON:
                         # Freno si la pastilla está en los bordes
                         if abs(ex) < 50 and abs(ey) < 50:
-                            targets[1] = max(5, brazo.estado_actual[1] - 1)
-                            if 6 not in targets: targets[6] = max(20, brazo.estado_actual[6] - 1)
+                            targets[PIN_HOMBRO] = max(5, brazo.estado_actual[PIN_HOMBRO] - 1)
+                            if PIN_CODO not in targets: targets[PIN_CODO] = max(20, brazo.estado_actual[PIN_CODO] - 1)
                     
                     elif z_coord > Z_LIMITE_FINAL:
                         if abs(ex) <= TOLERANCIA_CENTRADO and abs(ey) <= TOLERANCIA_CENTRADO:
@@ -291,12 +319,12 @@ def main():
 
                         if lockon_activado:
                             # Fase 3: Bajada vertical (Solo S1) con compensación de inclinación
-                            targets[1] = max(5, brazo.estado_actual[1] - 1)
+                            targets[PIN_HOMBRO] = max(5, brazo.estado_actual[PIN_HOMBRO] - 1)
 
                             # COMPENSACIÓN DE INCLINACIÓN REFORZADA:
                             # A medida que bajamos S1, subimos S15 para que la pinza no se incline hacia adelante
-                            if brazo.estado_actual[15] > 20:
-                                targets[15] = brazo.estado_actual[15] - 1 # Ajuste de 1:1 con S1
+                            if brazo.estado_actual[PIN_MUÑECA] > 20:
+                                targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] - 1 # Ajuste de 1:1 con S1
 
                             cv2.putText(frame_vis, "LOCK-ON: BAJANDO...", (10, 80), 
                                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
@@ -315,8 +343,8 @@ def main():
 
                         print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
                         brazo.mover_tiempo([
-                            (4, brazo.estado_actual[4] + FINAL_CORRECTION_S0),
-                            (15, brazo.estado_actual[15] + FINAL_CORRECTION_S15)
+                            (PIN_BASE, brazo.estado_actual[PIN_BASE] + FINAL_CORRECTION_S0),
+                            (PIN_MUÑECA, brazo.estado_actual[PIN_MUÑECA] + FINAL_CORRECTION_S15)
                         ])
 
                         estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
@@ -328,11 +356,11 @@ def main():
                         movimientos_finales = []
                         
                         # Manejo de S0 (Pulsado)
-                        if 4 in targets:
-                            movimientos_finales.append((4, targets[4]))
+                        if PIN_BASE in targets:
+                            movimientos_finales.append((PIN_BASE, targets[PIN_BASE]))
                         
                         # Manejo del resto de servos (S15, S6, S1)
-                        otros_targets = [(p, a) for p, a in targets.items() if p != 4]
+                        otros_targets = [(p, a) for p, a in targets.items() if p != PIN_BASE]
                         
                         if movimientos_finales or (otros_targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO):
                             # Combinamos todo en un envío para reducir latencia serial
@@ -358,11 +386,11 @@ def main():
                     # Movimiento suave hacia el color detectado
                     if abs(ex_b) > 20:
                         # INVERTIDO: si ex_b > 0, restamos ángulo. Paso aumentado a 2.
-                        targets[4] = brazo.estado_actual[4] + (-2 if ex_b > 0 else 2)
+                        targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-2 if ex_b > 0 else 2)
                     
                     # PRIORIDAD: Solo bajar si estamos relativamente centrados horizontalmente
                     if abs(ex_b) < 30 and abs(ey_b) > 10:
-                        targets[15] = brazo.estado_actual[15] + (1 if ey_b > 0 else -1)
+                        targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] + (1 if ey_b > 0 else -1)
                     
                     if targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
                         brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
@@ -383,8 +411,8 @@ def main():
                     if contador_pastilla_perdida == 30 and not recuperacion_pastilla_intentada:
                         print("[CONTROL] Pastilla perdida. Intentando recuperación con S15 (+10°)...")
                         # Subir S15 (restar ángulo para apuntar más hacia arriba)
-                        nuevo_s15 = max(0, brazo.estado_actual[15] - 10)
-                        brazo.mover_tiempo([(15, nuevo_s15)], esperar=True)
+                        nuevo_s15 = max(0, brazo.estado_actual[PIN_MUÑECA] - 10)
+                        brazo.mover_tiempo([(PIN_MUÑECA, nuevo_s15)], esperar=True)
                         recuperacion_pastilla_intentada = True
                     
                     elif contador_pastilla_perdida > 80:
@@ -405,7 +433,7 @@ def main():
                 
                 # 2. Cerrar pinza
                 print("[CONTROL] Cerrando pinza...")
-                brazo.mover_tiempo([(12, 0)], forzar=True, esperar=True) 
+                brazo.mover_tiempo([(PIN_PINZA, 0)], forzar=True, esperar=True) 
                 time.sleep(0.5)
                 
                 # --- NUEVO: CAPTURAR BASELINE INMEDIATAMENTE ---
@@ -420,20 +448,27 @@ def main():
                 # 4. Verificación Automática (Magnetómetro con SujecionEvaluator)
                 m1 = brazo.mag1
                 est_p = brazo.estado_pinza
-                print(f"\n[VERIFICACIÓN] Estado Pinza: {est_p} | Datos: X:{m1[0]:.1f}, Y:{m1[1]:.1f}, Z:{m1[2]:.1f}")
                 
-                if est_p == "CON_OBJETO":
-                    print("[¡ÉXITO!] Pastilla detectada automáticamente. Procediendo a búsqueda de maniquí.")
+                # --- REFINAMIENTO: Verificación contra firma de VACÍO ---
+                exito_real = brazo.evaluador_agarre.verificar_presencia_real(m1[0], m1[1], m1[2])
+                
+                print(f"\n[VERIFICACIÓN] Estado: {est_p} | Verificación Real: {'OK' if exito_real else 'FALLO'}")
+                print(f"[DATOS] X:{m1[0]:.1f}, Y:{m1[1]:.1f}, Z:{m1[2]:.1f}")
+                
+                if est_p == "CON_OBJETO" and exito_real:
+                    print("[¡ÉXITO!] Pastilla detectada y verificada. Procediendo a búsqueda de maniquí.")
                     pastilla_en_transporte = True
                     estado_actual = Estado.OBSERVACION_MANIQUI
-                    # Loguear éxito para calibración continua si se desea
                     log_mag_data(m1[0], m1[1], m1[2], "CON_OBJETO")
                 else:
-                    print("[FALLO] No se detectó la pastilla. Abriendo pinza y reintentando...")
+                    if not exito_real:
+                        print("[FALLO CRÍTICO] La pinza parece estar VACÍA (Falso Positivo evitado).")
+                    else:
+                        print("[FALLO] No se detectó la pastilla.")
+                    
                     pastilla_en_transporte = False
-                    brazo.mover_tiempo([(12, 80)], esperar=True) # Abrir
+                    brazo.mover_tiempo([(PIN_PINZA, 80)], esperar=True) # Abrir
                     estado_actual = Estado.OBSERVACION
-                    # Loguear fallo para calibración continua si se desea
                     log_mag_data(m1[0], m1[1], m1[2], "VACIO_CERRADO")
                 
                 macro_movimiento_hecho = False
@@ -505,24 +540,24 @@ def main():
                         if abs(ex) > 8:
                             paso_x = 3 if abs(ex) > 60 else 2
                             # INVERTIDO: si ex > 0 (objetivo a la derecha visual), restamos ángulo
-                            targets[4] = brazo.estado_actual[4] + (-paso_x if ex > 0 else paso_x)
+                            targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-paso_x if ex > 0 else paso_x)
                         
                         # Centrado Vertical Dinámico (S15 + S6)
                         if abs(ey) > 10:
                             # S15: 0 arriba, 180 abajo. Si ey > 0 (objetivo abajo), sumamos.
-                            targets[15] = brazo.estado_actual[15] + (1 if ey > 0 else -1)
+                            targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] + (1 if ey > 0 else -1)
                             if abs(ey) > 30:
-                                targets[6] = brazo.estado_actual[6] + (1 if ey > 0 else -1)
+                                targets[PIN_CODO] = brazo.estado_actual[PIN_CODO] + (1 if ey > 0 else -1)
 
                     # Lógica de ACERCAMIENTO COORDINADO (Extensión S1 + S6)
                     if z_coord > Z_LIMITE_ENTREGA:
                         # S1: Progresión constante hacia adelante
-                        if brazo.estado_actual[1] > 70:
-                            targets[1] = brazo.estado_actual[1] - 1
+                        if brazo.estado_actual[PIN_HOMBRO] > 70:
+                            targets[PIN_HOMBRO] = brazo.estado_actual[PIN_HOMBRO] - 1
                         
                         # S6: Ayuda a la extensión solo si la boca está centrada verticalmente
-                        if 6 not in targets and brazo.estado_actual[6] > 0:
-                            targets[6] = brazo.estado_actual[6] - 1
+                        if PIN_CODO not in targets and brazo.estado_actual[PIN_CODO] > 0:
+                            targets[PIN_CODO] = brazo.estado_actual[PIN_CODO] - 1
                         
                         if z_coord <= Z_UMBRAL_LOCKON and abs(ex) <= TOLERANCIA_CENTRADO:
                             if not lockon_activado_boca:
@@ -546,8 +581,8 @@ def main():
                     if contador_sondeo < 30: 
                         # --- RECUPERACIÓN HACIA ARRIBA ---
                         if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                            nuevo_s15 = max(0, brazo.estado_actual[15] - 2)
-                            brazo.mover_tiempo([(15, nuevo_s15)], esperar=False)
+                            nuevo_s15 = max(0, brazo.estado_actual[PIN_MUÑECA] - 2)
+                            brazo.mover_tiempo([(PIN_MUÑECA, nuevo_s15)], esperar=False)
                             last_move_time = ahora
                         cv2.putText(frame_vis, "RECUPERANDO (MIRANDO ARRIBA)...", (10, 60), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
@@ -556,7 +591,7 @@ def main():
                         # Sondeo lateral oscilante (S0)
                         if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
                             offset = int(8 * np.sin(contador_sondeo * 0.15))
-                            brazo.mover_tiempo([(4, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
+                            brazo.mover_tiempo([(PIN_BASE, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
                             last_move_time = ahora
                         cv2.putText(frame_vis, "SONDEO DE BOCA...", (10, 60), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
@@ -597,7 +632,7 @@ def main():
 
             elif estado_actual == Estado.ENTREGA:
                 sosteniendo_y_logueando = False # Detener logueo al soltar
-                brazo.mover_tiempo([(12, 80)]) # Abrir a 80
+                brazo.mover_tiempo([(PIN_PINZA, 80)]) # Abrir a 80
                 time.sleep(1)
                 estado_actual = Estado.HOME
                 macro_movimiento_hecho = False
@@ -635,6 +670,18 @@ def main():
             umbral_actual = Z_LIMITE_ENTREGA if "BOCA" in estado_actual or "ENTREGA" in estado_actual or "MANIQUI" in estado_actual else Z_LIMITE_FINAL
             color_z = (0, 255, 0) if z_coord <= umbral_actual else (0, 255, 255)
             cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
+
+            # Visualización de Velocidad y Alerta de Seguridad
+            v_abs = abs(velocidad_z)
+            en_riesgo = z_coord < DISTANCIA_SEGURIDAD and v_abs > VELOCIDAD_LIMITE
+            color_v = (0, 0, 255) if en_riesgo else (255, 255, 255)
+            
+            cv2.putText(frame_vis, f"VELOCIDAD: {v_abs:.1f} mm/s", (10, 60), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_v, 2)
+            
+            if en_riesgo:
+                cv2.putText(frame_vis, "!!! EXCESO DE VELOCIDAD EN ZONA CRITICA !!!", (10, 85), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
             
             # --- VISUALIZACIÓN DE MAGNETÓMETRO (Solo M1 - Inferior Derecha) ---
             m1 = brazo.mag1
