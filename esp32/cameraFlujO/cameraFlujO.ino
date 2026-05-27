@@ -76,7 +76,7 @@ void setup() {
     s->set_exposure_ctrl(s, 0);    // Opciones: 1 (Auto), 0 (Manual).
 
     // Establece el tiempo de exposición manualmente (solo si set_exposure_ctrl es 0).
-    s -> set_aec_value(s, 220); // Opciones: 0 a 1200 (Aproximadamente, depende del sensor). Valores más altos = más luz pero más desenfoque de movimiento.
+    s -> set_aec_value(s, 320); // Opciones: 0 a 1200 (Aproximadamente, depende del sensor). Valores más altos = más luz pero más desenfoque de movimiento.
     
     //Ajusta el "objetivo" de brillo que el modo automático intenta alcanzar.
     //s->set_ae_level(s, 1);       //Opciones: -2, -1, 0, 1, 2.

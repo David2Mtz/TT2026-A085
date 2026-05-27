@@ -95,6 +95,11 @@ def main():
     persistencia_deteccion = 0
     UMBRAL_PERSISTENCIA_DETECCION = 5 # Frames seguidos viendo la pastilla para confiar
     
+    # --- BUFFERS DE ERROR PARA MOVIMIENTO SUAVE ---
+    buffer_ex = []
+    buffer_ey = []
+    BUFFER_SIZE = 10
+    
     # --- VARIABLES DE VELOCIDAD Y SEGURIDAD ---
     last_z = 0
     last_z_time = time.time()
@@ -222,6 +227,11 @@ def main():
                     estado_actual = Estado.RECOLECCION
                     macro_movimiento_hecho = False
                     contador_sondeo_color = 0
+                    # Resetear control de movimiento
+                    lockon_activado = False
+                    buffer_ex.clear()
+                    buffer_ey.clear()
+                    persistencia_deteccion = 0
                 else:
                     # LÓGICA DE SONDEO SECUENCIAL (derecha -> izquierda)
                     cv2.putText(frame_vis, f"Sondeando {COLOR_OBJETIVO} ({fase_sondeo_color})...", (10, 60), 
@@ -252,176 +262,153 @@ def main():
             elif estado_actual == Estado.RECOLECCION:
                 if frame is None: continue
                 
-                # Inicializar variables de error y targets para evitar UnboundLocalError
+                # Inicializar variables de error y targets
                 ex, ey = 0, 0
                 targets = {}
                 
                 # Intentar segmentación fina de la pastilla
                 frame_vis, info = process_pastillas_frame(frame_vis, COLOR_OBJETIVO.lower())
 
-                
-                # Obtener detección de color como respaldo
-                _, colores_backup, info_colores_backup = process_color_frame(frame.copy())
+                # Obtener detección de color como respaldo (solo si no hay segmentación fina)
+                colores_backup = []
+                if not info and not lockon_activado:
+                    _, colores_backup, info_colores_backup = process_color_frame(frame.copy())
                 
                 if info or lockon_activado:
-                    # Aplicar filtro de persistencia temporal
-                    if not lockon_activado:
+                    # Acumular en buffer si hay detección fina
+                    if info:
+                        ex_curr, ey_curr, area = info
+                        buffer_ex.append(ex_curr)
+                        buffer_ey.append(ey_curr)
                         persistencia_deteccion += 1
-                        if persistencia_deteccion < UMBRAL_PERSISTENCIA_DETECCION:
-                            cv2.putText(frame_vis, f"FILTRANDO RUIDO ({persistencia_deteccion}/{UMBRAL_PERSISTENCIA_DETECCION})", (10, 60), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-                            info = None # Ignorar detección hasta que sea estable
                     
-                    if info or lockon_activado:
-                        ex, ey, area = info if info else (0, 0, 0)
-                        targets = {} 
+                    # Filtro de persistencia inicial
+                    if not lockon_activado and persistencia_deteccion < UMBRAL_PERSISTENCIA_DETECCION:
+                        cv2.putText(frame_vis, f"FILTRANDO RUIDO ({persistencia_deteccion}/{UMBRAL_PERSISTENCIA_DETECCION})", (10, 60), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                    else:
+                        # Decidir si procesamos movimiento: Cada 10 frames o si estamos en Lock-On
+                        ready_to_move = lockon_activado or len(buffer_ex) >= BUFFER_SIZE
                         
-                        if not lockon_activado:
-                            # --- CENTRADO EJE X (PIN_BASE) ---
-                            s4_needs_move = abs(ex) > TOLERANCIA_CENTRADO
-                            if s4_needs_move:
-                                # INVERTIDO: si ex > 0 (objetivo a la derecha), restamos ángulo
-                                targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-1 if ex > 0 else 1)
-
-                            # --- EJE Y (PIN_MUÑECA + PIN_CODO) ---
-                            # Condición de movimiento vertical:
-                            # 1. Si Z < 130 (centrado final), NO bajar si la base se está moviendo (Exclusión mutua)
-                            # 2. Si Z > 130, permitir bajar si el error X es razonable (< 40)
-                            if z_coord < 130:
-                                can_move_vertical = not s4_needs_move
+                        if ready_to_move:
+                            if not lockon_activado and buffer_ex:
+                                ex = sum(buffer_ex) / len(buffer_ex)
+                                ey = sum(buffer_ey) / len(buffer_ey)
+                                buffer_ex.clear()
+                                buffer_ey.clear()
                             else:
-                                can_move_vertical = abs(ex) < 40
-                            
-                            if can_move_vertical:
-                                angulo_15 = brazo.estado_actual[PIN_MUÑECA]
-                                angulo_6 = brazo.estado_actual[PIN_CODO]
-                                if abs(ey) > 10:
-                                    if ey > 0: # Abajo -> Extender
-                                        if angulo_15 < 180: angulo_15 += 1
-                                        else: targets[PIN_CODO] = angulo_6 + 1
-                                    else:      # Arriba -> Retraer
-                                        if angulo_15 > 10: angulo_15 -= 1
-                                        else: targets[PIN_CODO] = max(20, angulo_6 - 1)
-                                if angulo_15 != brazo.estado_actual[PIN_MUÑECA]: targets[PIN_MUÑECA] = angulo_15
+                                ex, ey = 0, 0 # En lockon bajamos verticalmente sin mirar X
 
-                    # Lógica de Descenso
-                    if z_coord > Z_UMBRAL_LOCKON:
-                        # Freno si la pastilla está en los bordes
-                        if abs(ex) < 50 and abs(ey) < 50:
-                            targets[PIN_HOMBRO] = max(5, brazo.estado_actual[PIN_HOMBRO] - 1)
-                            if PIN_CODO not in targets: targets[PIN_CODO] = max(20, brazo.estado_actual[PIN_CODO] - 1)
-                    
-                    elif z_coord > Z_LIMITE_FINAL:
-                        if abs(ex) <= TOLERANCIA_CENTRADO and abs(ey) <= TOLERANCIA_CENTRADO:
+                            # --- LÓGICA DE CENTRADO (Solo si NO estamos en Lock-On) ---
                             if not lockon_activado:
-                                print("[CONTROL] Centrado OK. Lock-On ACTIVADO.")
-                                lockon_activado = True
+                                # Centrado Eje X (PIN_BASE)
+                                if abs(ex) > TOLERANCIA_CENTRADO:
+                                    targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-1 if ex > 0 else 1)
 
-                        if lockon_activado:
-                            # Fase 3: Bajada vertical (Solo S1) con compensación de inclinación
-                            targets[PIN_HOMBRO] = max(5, brazo.estado_actual[PIN_HOMBRO] - 1)
+                                # Centrado Eje Y (PIN_MUÑECA + PIN_CODO) - MÁS LIBERTAD
+                                # Permitir bajar si el error X es razonable (40 si está cerca, 70 si está lejos)
+                                can_move_vertical = abs(ex) < (40 if z_coord < 130 else 70)
+                                
+                                if can_move_vertical:
+                                    angulo_15 = brazo.estado_actual[PIN_MUÑECA]
+                                    angulo_6 = brazo.estado_actual[PIN_CODO]
+                                    if abs(ey) > 10:
+                                        if ey > 0: # Abajo -> Extender
+                                            if angulo_15 < 180: angulo_15 += 1
+                                            else: targets[PIN_CODO] = angulo_6 + 1
+                                        else:      # Arriba -> Retraer
+                                            if angulo_15 > 10: angulo_15 -= 1
+                                            else: targets[PIN_CODO] = max(20, angulo_6 - 1)
+                                    if angulo_15 != brazo.estado_actual[PIN_MUÑECA]: targets[PIN_MUÑECA] = angulo_15
 
-                            # COMPENSACIÓN DE INCLINACIÓN REFORZADA:
-                            # A medida que bajamos S1, subimos S15 para que la pinza no se incline hacia adelante
-                            if brazo.estado_actual[PIN_MUÑECA] > 20:
-                                targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] - 1 # Ajuste de 1:1 con S1
-
-                            cv2.putText(frame_vis, "LOCK-ON: BAJANDO...", (10, 80), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                        else:
-                            cv2.putText(frame_vis, "CENTRANDO FINAL...", (10, 80), 
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-
-                    # 3. Condición de Parada Final (75mm)
-                    if z_coord <= Z_LIMITE_FINAL:
-                        print(f"[ToF] POSICION DE AGARRE ALCANZADA ({z_coord}mm).")
-
-                        # --- AJUSTE FINO CIEGO (Compensación Final de Parallax) ---
-                        # Si a 75mm la pinza queda un poco desfasada, ajustamos aquí:
-                        FINAL_CORRECTION_S0 = 0  # Grados extra para centrar X
-                        FINAL_CORRECTION_S15 = 5 # Grados extra para centrar Y (hacia arriba)
-
-                        print(f"[INFO] Aplicando corrección final: S0+{FINAL_CORRECTION_S0}, S15+{FINAL_CORRECTION_S15}")
-                        brazo.mover_tiempo([
-                            (PIN_BASE, brazo.estado_actual[PIN_BASE] + FINAL_CORRECTION_S0),
-                            (PIN_MUÑECA, brazo.estado_actual[PIN_MUÑECA] + FINAL_CORRECTION_S15)
-                        ])
-
-                        estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
-                        macro_movimiento_hecho = False
-
-                    
-                    if targets:
-                        # Preparamos los movimientos para enviar en un solo comando serial si es posible
-                        movimientos_finales = []
-                        
-                        # Manejo de S0 (Pulsado)
-                        if PIN_BASE in targets:
-                            movimientos_finales.append((PIN_BASE, targets[PIN_BASE]))
-                        
-                        # Manejo del resto de servos (S15, S6, S1)
-                        otros_targets = [(p, a) for p, a in targets.items() if p != PIN_BASE]
-                        
-                        if movimientos_finales or (otros_targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO):
-                            # Combinamos todo en un envío para reducir latencia serial
-                            # solo si ha pasado el tiempo para los servos secundarios
-                            if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                                movimientos_finales.extend(otros_targets)
-                                last_move_time = ahora
+                            # --- LÓGICA DE DESCENSO (S1 - PIN_HOMBRO) ---
+                            if z_coord > Z_UMBRAL_LOCKON:
+                                # Descenso suave si la pastilla está razonablemente centrada
+                                if abs(ex) < 85 and abs(ey) < 85:
+                                    targets[PIN_HOMBRO] = max(5, brazo.estado_actual[PIN_HOMBRO] - 1)
+                                    if PIN_CODO not in targets: targets[PIN_CODO] = max(20, brazo.estado_actual[PIN_CODO] - 1)
                             
-                            if movimientos_finales:
-                                brazo.mover_tiempo(movimientos_finales, esperar=False)
-                    
-                    # Resetear contadores si hay detección o lock-on
+                            elif z_coord > Z_LIMITE_FINAL:
+                                # Transición a LOCK-ON si estamos bien centrados
+                                if abs(ex) <= TOLERANCIA_CENTRADO and abs(ey) <= TOLERANCIA_CENTRADO:
+                                    if not lockon_activado:
+                                        print("[CONTROL] Centrado OK. Lock-On ACTIVADO.")
+                                        lockon_activado = True
+
+                                if lockon_activado:
+                                    # Bajada vertical final (S1) con compensación 1:1 en S15
+                                    targets[PIN_HOMBRO] = max(5, brazo.estado_actual[PIN_HOMBRO] - 1)
+                                    if brazo.estado_actual[PIN_MUÑECA] > 20:
+                                        targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] - 1
+                                    cv2.putText(frame_vis, "LOCK-ON: BAJANDO...", (10, 80), 
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                                else:
+                                    cv2.putText(frame_vis, "CENTRANDO FINAL...", (10, 80), 
+                                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+                            # --- CONDICIÓN DE PARADA FINAL ---
+                            if z_coord <= Z_LIMITE_FINAL:
+                                print(f"[ToF] POSICION DE AGARRE ALCANZADA ({z_coord}mm).")
+                                # Pequeño ajuste final de inclinación antes de agarrar
+                                brazo.mover_tiempo([
+                                    (PIN_MUÑECA, brazo.estado_actual[PIN_MUÑECA] + 5)
+                                ], esperar=True)
+                                estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
+                                macro_movimiento_hecho = False
+
+                            # --- EJECUCIÓN DE MOVIMIENTOS ---
+                            if targets:
+                                brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                                last_move_time = ahora
+
+                    # Resetear contadores de pérdida si hay detección o lock-on
                     contador_pastilla_perdida = 0
                     recuperacion_pastilla_intentada = False
                 
                 elif COLOR_OBJETIVO in colores_backup:
-                    # RESPALDO: Si no hay segmentación fina pero sí vemos el color
+                    # RESPALDO: Detección de color si la segmentación fina falla
                     cx, cy = info_colores_backup[COLOR_OBJETIVO]
                     ex_b = cx - (frame_vis.shape[1] // 2)
                     ey_b = cy - (frame_vis.shape[0] // 2)
                     
-                    targets = {}
-                    # Movimiento suave hacia el color detectado
+                    targets_b = {}
                     if abs(ex_b) > 20:
-                        # INVERTIDO: si ex_b > 0, restamos ángulo. Paso aumentado a 2.
-                        targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-2 if ex_b > 0 else 2)
+                        targets_b[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-2 if ex_b > 0 else 2)
                     
-                    # PRIORIDAD: Solo bajar si estamos relativamente centrados horizontalmente
                     if abs(ex_b) < 30 and abs(ey_b) > 10:
-                        targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] + (1 if ey_b > 0 else -1)
+                        targets_b[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] + (1 if ey_b > 0 else -1)
                     
-                    if targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                        brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                    if targets_b and (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
+                        brazo.mover_tiempo([(p, a) for p, a in targets_b.items()], esperar=False)
                         last_move_time = ahora
                     
-                    # RESETEAR contadores de pérdida si el respaldo ve el color
                     contador_pastilla_perdida = 0
                     recuperacion_pastilla_intentada = False
-                    
                     cv2.putText(frame_vis, f"Aproximando a {COLOR_OBJETIVO}...", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 
                 else:
+                    # LÓGICA DE RECUPERACIÓN: Si perdemos la pastilla
                     persistencia_deteccion = 0
-                    # LÓGICA DE RECUPERACIÓN (Si perdemos la pastilla)
+                    buffer_ex.clear()
+                    buffer_ey.clear()
                     contador_pastilla_perdida += 1
                     
-                    if contador_pastilla_perdida == 30 and not recuperacion_pastilla_intentada:
-                        print("[CONTROL] Pastilla perdida. Intentando recuperación con S15 (+10°)...")
-                        # Subir S15 (restar ángulo para apuntar más hacia arriba)
-                        nuevo_s15 = max(0, brazo.estado_actual[PIN_MUÑECA] - 10)
-                        brazo.mover_tiempo([(PIN_MUÑECA, nuevo_s15)], esperar=True)
+                    if contador_pastilla_perdida == 25 and not recuperacion_pastilla_intentada:
+                        print("[CONTROL] Pastilla perdida. Subiendo brazo para recuperar vista...")
+                        # Subir Hombro y ajustar Muñeca para ver más área (Movimiento hacia arriba en Y visual)
+                        nuevo_s1 = min(110, brazo.estado_actual[PIN_HOMBRO] + 15)
+                        nuevo_s15 = max(20, brazo.estado_actual[PIN_MUÑECA] - 15)
+                        brazo.mover_tiempo([(PIN_HOMBRO, nuevo_s1), (PIN_MUÑECA, nuevo_s15)], esperar=True)
                         recuperacion_pastilla_intentada = True
                     
-                    elif contador_pastilla_perdida > 80:
-                        print("[CONTROL] Pastilla no encontrada tras recuperación. Regresando a OBSERVACION.")
+                    elif contador_pastilla_perdida > 70:
+                        print("[CONTROL] Pastilla no encontrada. Regresando a OBSERVACION.")
                         estado_actual = Estado.OBSERVACION
                         macro_movimiento_hecho = False
                         contador_pastilla_perdida = 0
                         recuperacion_pastilla_intentada = False
-
+                
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
                 cv2.putText(frame_vis, "PREPARANDO AGARRE... ESPERE", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
                 cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
@@ -432,7 +419,12 @@ def main():
                 time.sleep(1.0)
                 
                 # 2. Cerrar pinza
-                print("[CONTROL] Cerrando pinza...")
+                print("[CONTROL] Compensando altura y cerrando pinza...")
+                
+                # Desplazamiento forzado manual: subir muñeca (-5) antes de cerrar
+                nuevo_s7 = max(0, brazo.estado_actual[PIN_MUÑECA] - 5)
+                brazo.mover_tiempo([(PIN_MUÑECA, nuevo_s7)], esperar=True)
+                
                 brazo.mover_tiempo([(PIN_PINZA, 0)], forzar=True, esperar=True) 
                 time.sleep(0.5)
                 
@@ -501,6 +493,8 @@ def main():
                 if coords_boca:
                     estado_actual = Estado.SEGUIMIENTO_BOCA
                     macro_movimiento_hecho = False
+                    buffer_ex.clear()
+                    buffer_ey.clear()
                 else:
                     cv2.putText(frame_vis, "Buscando boca...", (10, 60), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
@@ -508,8 +502,9 @@ def main():
             elif estado_actual == Estado.SEGUIMIENTO_BOCA:
                 if frame is None: continue
 
-                # Inicializar variables de error para evitar UnboundLocalError
+                # Inicializar variables de error y targets
                 ex, ey = 0, 0
+                targets = {}
                 
                 # Ya no rotamos el frame
                 frame_vis = frame.copy()
@@ -521,61 +516,77 @@ def main():
                 frame_vis, coords_boca = get_mouth_coordinates(frame_vis)
                 
                 if coords_boca:
-                    # Resetear contador de sondeo si vemos la boca
-                    contador_sondeo = 0
+                    # Acumular en buffer
+                    ex_boca = coords_boca[0] - (frame_vis.shape[1] // 2) + BOCA_OFFSET_X
+                    ey_raw_boca = coords_boca[1] - (frame_vis.shape[0] // 2) + BOCA_OFFSET_Y
                     
-                    # Errores en frame corregido + Offsets
-                    ex = coords_boca[0] - (frame_vis.shape[1] // 2) + BOCA_OFFSET_X
-                    ey_raw = coords_boca[1] - (frame_vis.shape[0] // 2) + BOCA_OFFSET_Y
+                    buffer_ex.append(ex_boca)
+                    buffer_ey.append(ey_raw_boca)
                     
-                    # --- COMPENSACIÓN DINÁMICA DE ALTURA (Y) ---
-                    dist_factor = max(0, Z_UMBRAL_LOCKON - z_coord)
-                    offset_y_compensacion = int(dist_factor * BOCA_COMP_FACTOR) 
-                    ey = ey_raw + offset_y_compensacion 
-
-                    targets = {} 
+                    # Decidir si procesamos movimiento: Cada 10 frames o si estamos en Lock-On
+                    ready_to_move = lockon_activado_boca or len(buffer_ex) >= BUFFER_SIZE
                     
-                    if not lockon_activado_boca:
-                        # Centrado Horizontal (S0)
-                        if abs(ex) > 8:
-                            paso_x = 3 if abs(ex) > 60 else 2
-                            # INVERTIDO: si ex > 0 (objetivo a la derecha visual), restamos ángulo
-                            targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-paso_x if ex > 0 else paso_x)
+                    if ready_to_move:
+                        # Resetear contador de sondeo si vemos la boca
+                        contador_sondeo = 0
                         
-                        # Centrado Vertical Dinámico (S15 + S6)
-                        if abs(ey) > 10:
-                            # S15: 0 arriba, 180 abajo. Si ey > 0 (objetivo abajo), sumamos.
-                            targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] + (1 if ey > 0 else -1)
-                            if abs(ey) > 30:
-                                targets[PIN_CODO] = brazo.estado_actual[PIN_CODO] + (1 if ey > 0 else -1)
+                        if not lockon_activado_boca and buffer_ex:
+                            ex = sum(buffer_ex) / len(buffer_ex)
+                            ey_raw = sum(buffer_ey) / len(buffer_ey)
+                            buffer_ex.clear()
+                            buffer_ey.clear()
+                        else:
+                            ex, ey_raw = 0, 0 # En lockon bajamos verticalmente sin mirar X
 
-                    # Lógica de ACERCAMIENTO COORDINADO (Extensión S1 + S6)
-                    if z_coord > Z_LIMITE_ENTREGA:
-                        # S1: Progresión constante hacia adelante
-                        if brazo.estado_actual[PIN_HOMBRO] > 70:
-                            targets[PIN_HOMBRO] = brazo.estado_actual[PIN_HOMBRO] - 1
-                        
-                        # S6: Ayuda a la extensión solo si la boca está centrada verticalmente
-                        if PIN_CODO not in targets and brazo.estado_actual[PIN_CODO] > 0:
-                            targets[PIN_CODO] = brazo.estado_actual[PIN_CODO] - 1
-                        
-                        if z_coord <= Z_UMBRAL_LOCKON and abs(ex) <= TOLERANCIA_CENTRADO:
-                            if not lockon_activado_boca:
-                                print("[CONTROL] Lock-On Boca ACTIVADO.")
-                                lockon_activado_boca = True
+                        # --- COMPENSACIÓN DINÁMICA DE ALTURA (Y) ---
+                        dist_factor = max(0, Z_UMBRAL_LOCKON - z_coord)
+                        offset_y_compensacion = int(dist_factor * BOCA_COMP_FACTOR) 
+                        ey = ey_raw + offset_y_compensacion 
 
-                    # 3. Condición de Parada Final
-                    if z_coord <= Z_LIMITE_ENTREGA:
-                        print(f"[ToF] POSICION DE ENTREGA ALCANZADA ({z_coord}mm).")
-                        estado_actual = Estado.ESPERA_CONFIRMACION_ENTREGA
-                        macro_movimiento_hecho = False
+                        # --- LÓGICA DE CENTRADO (Solo si NO hay Lock-On) ---
+                        if not lockon_activado_boca:
+                            # Centrado Horizontal (S0 - PIN_BASE)
+                            if abs(ex) > 8:
+                                paso_x = 3 if abs(ex) > 60 else 2
+                                targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-paso_x if ex > 0 else paso_x)
+                            
+                            # Centrado Vertical Dinámico (S15 + S6)
+                            if abs(ey) > 10:
+                                targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] + (1 if ey > 0 else -1)
+                                if abs(ey) > 30:
+                                    targets[PIN_CODO] = brazo.estado_actual[PIN_CODO] + (1 if ey > 0 else -1)
 
-                    if targets and (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                        brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
-                        last_move_time = ahora
+                        # --- LÓGICA DE ACERCAMIENTO COORDINADO ---
+                        if z_coord > Z_LIMITE_ENTREGA:
+                            # Progresión constante hacia adelante (S1)
+                            if brazo.estado_actual[PIN_HOMBRO] > 70:
+                                targets[PIN_HOMBRO] = brazo.estado_actual[PIN_HOMBRO] - 1
+                            
+                            # Ayuda a la extensión (S6) solo si está centrado verticalmente
+                            if PIN_CODO not in targets and brazo.estado_actual[PIN_CODO] > 0:
+                                targets[PIN_CODO] = brazo.estado_actual[PIN_CODO] - 1
+                            
+                            # Activar Lock-On Boca
+                            if z_coord <= Z_UMBRAL_LOCKON and abs(ex) <= TOLERANCIA_CENTRADO:
+                                if not lockon_activado_boca:
+                                    print("[CONTROL] Lock-On Boca ACTIVADO.")
+                                    lockon_activado_boca = True
+
+                        # --- CONDICIÓN DE PARADA FINAL ---
+                        if z_coord <= Z_LIMITE_ENTREGA:
+                            print(f"[ToF] POSICION DE ENTREGA ALCANZADA ({z_coord}mm).")
+                            estado_actual = Estado.ESPERA_CONFIRMACION_ENTREGA
+                            macro_movimiento_hecho = False
+
+                        # --- EJECUCIÓN DE MOVIMIENTOS ---
+                        if targets:
+                            brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                            last_move_time = ahora
                 
                 else:
                     # LÓGICA DE SONDEO / RECUPERACIÓN (Si perdemos la boca)
+                    buffer_ex.clear()
+                    buffer_ey.clear()
                     contador_sondeo += 1
                     
                     if contador_sondeo < 30: 
