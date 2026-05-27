@@ -198,7 +198,7 @@ class ArmController:
         with self.lock: self.busy = False
 
     def centrar_ibvs(self, error_x, error_y, paso_x=1, paso_y=1):
-        """Ajuste fino basado en visión (IBVS)."""
+        """Ajuste fino basado en visión (IBVS) con compensación de muñeca integrada."""
         tolerancia = 8
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
             return True
@@ -207,14 +207,19 @@ class ArmController:
         if error_x > tolerancia: cmds.append((PIN_BASE, self.estado_actual[PIN_BASE] - paso_x))
         elif error_x < -tolerancia: cmds.append((PIN_BASE, self.estado_actual[PIN_BASE] + paso_x))
         
-        if error_y > tolerancia: cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] + paso_y))
-        elif error_y < -tolerancia: cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] - paso_y))
+        # Compensación vertical: Si bajamos (error_y < 0), subimos muñeca (paso_y)
+        # Se ha fortalecido la compensación sumando un pequeño extra o usando un paso más firme
+        if error_y > tolerancia: 
+            cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] + paso_y))
+        elif error_y < -tolerancia: 
+            # Si la pinza debe bajar, subimos la muñeca un poco más agresivamente para compensar el descenso
+            cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] - (paso_y + 1)))
         
         if cmds: self.mover_tiempo(cmds, esperar=False) # No esperamos OK en IBVS para mayor velocidad
         return False
 
     def centrar_proporcional(self, error_x, error_y):
-        """Ajuste inteligente basado en un controlador Proporcional."""
+        """Ajuste inteligente basado en un controlador Proporcional con compensación reforzada."""
         tolerancia = 10
         kp_x = 0.03 # Aumentado levemente
         kp_y = 0.02  
@@ -243,7 +248,13 @@ class ArmController:
 
         if abs(error_y) > tolerancia:
             self.intentos_y += 1
-            nuevo_angulo_15 = self.estado_actual[PIN_MUÑECA] + paso_y
+            # Compensación reforzada: Si el error_y es negativo (bajar), 
+            # el ajuste de la muñeca (PIN_MUÑECA) es más fuerte hacia arriba.
+            ajuste_muñeca = paso_y
+            if paso_y < 0: # Caso descenso
+                ajuste_muñeca -= 1 # Reforzar subida de muñeca en 1 grado extra
+                
+            nuevo_angulo_15 = self.estado_actual[PIN_MUÑECA] + ajuste_muñeca
             cmds.append((PIN_MUÑECA, nuevo_angulo_15))
             
             if self.intentos_y >= 5:

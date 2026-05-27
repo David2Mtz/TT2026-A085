@@ -15,7 +15,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
-from modules.pastillas_detector import process_pastillas_frame
+from modules.pastillas_detector import process_pastillas_frame, verify_pill_in_gripper
 from modules.detectarColor import process_color_frame
 from modules.detectorBoca import get_mouth_coordinates
 from modules.auto_exposure import AutoExposureControl
@@ -32,7 +32,7 @@ load_dotenv()
 
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyACM0')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = os.getenv('COLOR_OBJETIVO', 'Azul')
+COLOR_OBJETIVO = os.getenv('COLOR_OBJETIVO', 'Rojo')
 
 class Estado:
     HOME = "HOME"
@@ -46,6 +46,7 @@ class Estado:
     ESPERA_CONFIRMACION_ENTREGA = "ESPERA_CONFIRMACION_ENTREGA"
     EMERGENCIA = "EMERGENCIA"
     REINTENTO_OBJETO = "REINTENTO_OBJETO"
+    CALIBRAR = "CALIBRAR"
 
 def main():
     print("--- INICIANDO CICLO COMPLETO (AUTOMÁTICO) ---")
@@ -113,8 +114,18 @@ def main():
     print("\n[CALIBRACIÓN] Calibrando sensor de sujeción (vacío)...")
     brazo.mover_tiempo([(PIN_PINZA, 0)], forzar=True, esperar=True)
     time.sleep(1.0)
-    m_vacio = brazo.mag1
-    brazo.evaluador_agarre.registrar_vacio(m_vacio[0], m_vacio[1], m_vacio[2])
+    
+    # Registrar vacío en HOME
+    m_vacio_home = brazo.mag1
+    brazo.evaluador_agarre.registrar_vacio(m_vacio_home[0], m_vacio_home[1], m_vacio_home[2], estado="HOME")
+    
+    # Registrar vacío en PRE_RECOLECCION (donde se hace la verificación crítica)
+    print("[CALIBRACIÓN] Moviendo a PRE_RECOLECCION para firma de vacío en altura...")
+    brazo.mover_a_estado("PRE_RECOLECCION", esperar=True)
+    time.sleep(1.0)
+    m_vacio_pre = brazo.mag1
+    brazo.evaluador_agarre.registrar_vacio(m_vacio_pre[0], m_vacio_pre[1], m_vacio_pre[2], estado="PRE_RECOLECCION")
+    
     brazo.mover_tiempo([(PIN_PINZA, 80)], forzar=True, esperar=True)
     print("[CALIBRACIÓN] Listo.\n")
 
@@ -421,8 +432,8 @@ def main():
                 # 2. Cerrar pinza
                 print("[CONTROL] Compensando altura y cerrando pinza...")
                 
-                # Desplazamiento forzado manual: subir muñeca (-5) antes de cerrar
-                nuevo_s7 = max(0, brazo.estado_actual[PIN_MUÑECA] - 5)
+                # Desplazamiento forzado manual: (Ahora en 0 por solicitud del usuario)
+                nuevo_s7 = max(0, brazo.estado_actual[PIN_MUÑECA] - 0)
                 brazo.mover_tiempo([(PIN_MUÑECA, nuevo_s7)], esperar=True)
                 
                 brazo.mover_tiempo([(PIN_PINZA, 0)], forzar=True, esperar=True) 
@@ -441,17 +452,46 @@ def main():
                 m1 = brazo.mag1
                 est_p = brazo.estado_pinza
                 
-                # --- REFINAMIENTO: Verificación contra firma de VACÍO ---
-                exito_real = brazo.evaluador_agarre.verificar_presencia_real(m1[0], m1[1], m1[2])
+                # --- REFINAMIENTO: Verificación contra firma de VACÍO en PRE_RECOLECCION ---
+                exito_real = brazo.evaluador_agarre.verificar_presencia_real(m1[0], m1[1], m1[2], estado="PRE_RECOLECCION")
                 
-                print(f"\n[VERIFICACIÓN] Estado: {est_p} | Verificación Real: {'OK' if exito_real else 'FALLO'}")
-                print(f"[DATOS] X:{m1[0]:.1f}, Y:{m1[1]:.1f}, Z:{m1[2]:.1f}")
+                # --- NUEVO: Verificación Visual con la ESP32-CAM ---
+                confirmacion_visual = False
+                if frame is not None:
+                    confirmacion_visual = verify_pill_in_gripper(frame)
+                    print(f"[VERIFICACIÓN] Visual (Pink Pill): {'OK' if confirmacion_visual else 'NO DETECTADA'}")
                 
-                if est_p == "CON_OBJETO" and exito_real:
-                    print("[¡ÉXITO!] Pastilla detectada y verificada. Procediendo a búsqueda de maniquí.")
-                    pastilla_en_transporte = True
-                    estado_actual = Estado.OBSERVACION_MANIQUI
-                    log_mag_data(m1[0], m1[1], m1[2], "CON_OBJETO")
+                print(f"\n[VERIFICACIÓN] Magnética (Continua): {est_p} | Magnética (Relativa): {'OK' if exito_real else 'FALLO'}")
+                print(f"[DATOS MAG] X:{m1[0]:.1f}, Y:{m1[1]:.1f}, Z:{m1[2]:.1f}")
+                
+                # Prioridad: Si la verificación relativa (exito_real) es OK y confirmación visual también,
+                # o si una de ellas es extremadamente sólida.
+                if (exito_real and confirmacion_visual) or (exito_real and brazo.evaluador_agarre.verificar_presencia_real(m1[0], m1[1], m1[2], estado="PRE_RECOLECCION")):
+                    # Re-evaluamos para ver si el delta es muy alto (indicativo de objeto real vs ruido)
+                    norma_actual = (m1[0]**2 + m1[1]**2 + m1[2]**2)**0.5
+                    ref_vacio = brazo.evaluador_agarre.baselines_vacio.get("PRE_RECOLECCION", 0)
+                    delta_final = abs(norma_actual - ref_vacio)
+
+                    if delta_final > 400:
+                        if confirmacion_visual:
+                            print(f"[¡ÉXITO!] Pastilla confirmada por VISIÓN (Delta MAG anómalo: {delta_final:.1f}).")
+                            pastilla_en_transporte = True
+                            estado_actual = Estado.CALIBRAR
+                        else:
+                            print(f"[AVISO] Falso positivo evitado. Delta MAG anómalo ({delta_final:.1f}) sin confirmación visual.")
+                            pastilla_en_transporte = False
+                            brazo.mover_tiempo([(PIN_PINZA, 80)], esperar=True)
+                            estado_actual = Estado.OBSERVACION
+                    elif delta_final > 60 or (delta_final > 25 and confirmacion_visual):
+                        print(f"[¡ÉXITO!] Pastilla confirmada (Delta: {delta_final:.1f}). Procediendo a CALIBRACIÓN.")
+                        pastilla_en_transporte = True
+                        estado_actual = Estado.CALIBRAR # Cambiado de OBSERVACION_MANIQUI a CALIBRAR
+                        log_mag_data(m1[0], m1[1], m1[2], "CON_OBJETO")
+                    else:
+                        print(f"[AVISO] Falso positivo evitado. Delta ({delta_final:.1f}) insuficiente o sin confirmación visual.")
+                        pastilla_en_transporte = False
+                        brazo.mover_tiempo([(PIN_PINZA, 80)], esperar=True)
+                        estado_actual = Estado.OBSERVACION
                 else:
                     if not exito_real:
                         print("[FALLO CRÍTICO] La pinza parece estar VACÍA (Falso Positivo evitado).")
@@ -463,6 +503,33 @@ def main():
                     estado_actual = Estado.OBSERVACION
                     log_mag_data(m1[0], m1[1], m1[2], "VACIO_CERRADO")
                 
+                macro_movimiento_hecho = False
+
+            elif estado_actual == Estado.CALIBRAR:
+                print("\n[MODO CALIBRAR] Estabilizando para medición de Magnetómetro (1.5s)...")
+                cv2.putText(frame_vis, "CALIBRANDO MAGNETOMETRO...", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+                cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
+                cv2.waitKey(1)
+
+                lecturas_mag = []
+                inicio_cal = time.time()
+                while time.time() - inicio_cal < 1.5:
+                    lecturas_mag.append((brazo.mag1[0]**2 + brazo.mag1[1]**2 + brazo.mag1[2]**2)**0.5)
+                    time.sleep(0.05)
+                
+                norma_promedio = sum(lecturas_mag) / len(lecturas_mag)
+                ref_vacio = brazo.evaluador_agarre.baselines_vacio.get("PRE_RECOLECCION", 0)
+                delta_calibrado = abs(norma_promedio - ref_vacio)
+
+                print("="*40)
+                print(f" RESULTADO CALIBRACIÓN (en PRE_RECOLECCION)")
+                print(f" Norma Promedio con Objeto: {norma_promedio:.1f} uT")
+                print(f" Referencia Vacío: {ref_vacio:.1f} uT")
+                print(f" DELTA DETECTADO: {delta_calibrado:.1f} uT")
+                print("="*40)
+                print("[SISTEMA] Continuando a observación de maniquí...\n")
+                
+                estado_actual = Estado.OBSERVACION_MANIQUI
                 macro_movimiento_hecho = False
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
@@ -550,7 +617,7 @@ def main():
                                 paso_x = 3 if abs(ex) > 60 else 2
                                 targets[PIN_BASE] = brazo.estado_actual[PIN_BASE] + (-paso_x if ex > 0 else paso_x)
                             
-                            # Centrado Vertical Dinámico (S15 + S6)
+                            # Centrado Vertical Dinámico (S7 + S6)
                             if abs(ey) > 10:
                                 targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] + (1 if ey > 0 else -1)
                                 if abs(ey) > 30:
@@ -592,8 +659,8 @@ def main():
                     if contador_sondeo < 30: 
                         # --- RECUPERACIÓN HACIA ARRIBA ---
                         if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
-                            nuevo_s15 = max(0, brazo.estado_actual[PIN_MUÑECA] - 2)
-                            brazo.mover_tiempo([(PIN_MUÑECA, nuevo_s15)], esperar=False)
+                            nuevo_s7 = max(0, brazo.estado_actual[PIN_MUÑECA] - 2)
+                            brazo.mover_tiempo([(PIN_MUÑECA, nuevo_s7)], esperar=False)
                             last_move_time = ahora
                         cv2.putText(frame_vis, "RECUPERANDO (MIRANDO ARRIBA)...", (10, 60), 
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)

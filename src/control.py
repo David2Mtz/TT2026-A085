@@ -118,8 +118,8 @@ def main():
                 brazo.mover_tiempo([(1, 100), (6, 80)]) # Bajar (Codo Pin 6)
                 time.sleep(0.5)
                 
-                # Desplazamiento forzado manual: subir muñeca (7) antes de cerrar
-                nuevo_s7 = max(0, brazo.estado_actual[7] - 5)
+                # Desplazamiento forzado manual: subir muñeca (7) (Ahora en 0 por solicitud del usuario)
+                nuevo_s7 = max(0, brazo.estado_actual[7] - 0)
                 brazo.mover_tiempo([(7, nuevo_s7)], esperar=True)
                 
                 brazo.mover_tiempo([(12, 110)])          # Agarrar (Pin 12)
