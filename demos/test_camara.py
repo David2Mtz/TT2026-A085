@@ -13,10 +13,11 @@ load_dotenv()
 
 def test_stream():
     puerto = os.getenv('PUERTO_CAMARA', '/dev/cu.usbmodem21201')
-    print(f"--- INICIANDO PRUEBA DE CÁMARA EN {puerto} ---")
+    baud = int(os.getenv('BAUD_CAMARA', 460800))
+    print(f"--- INICIANDO PRUEBA DE CÁMARA EN {puerto} A {baud} BAUD ---")
     
-    # Inicia con el baud rate corregido (460800)
-    camara = CameraSerial(port=puerto, baud_rate=460800)
+    # Inicia con el baud rate corregido
+    camara = CameraSerial(port=puerto, baud_rate=baud)
     
     if not camara.ser:
         print("[ERROR] No se pudo abrir el puerto serial. Revisa la conexión.")

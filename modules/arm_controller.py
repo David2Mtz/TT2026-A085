@@ -5,6 +5,9 @@ import threading
 from dotenv import load_dotenv
 from constants.posiciones import POSICIONES
 from modules.sujecion_evaluator import SujecionEvaluator
+from constants.config import (
+    PIN_BASE, PIN_HOMBRO, PIN_CODO, PIN_MUÑECA, PIN_ROTADOR, PIN_PINZA
+)
 
 load_dotenv()
 
@@ -13,7 +16,15 @@ class ArmController:
         self.puerto = puerto or os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
         self.baudios = baudios
         # Estado inicial sincronizado con el firmware
-        self.estado_actual = {0: 90, 1: 180, 2: 0, 6: 140, 15: 90, 8: 0, 12: 80}
+        self.estado_actual = {
+            PIN_BASE: 90, 
+            PIN_HOMBRO: 180, 
+            2: 0, 
+            PIN_CODO: 140, 
+            PIN_MUÑECA: 90, 
+            PIN_ROTADOR: 0, 
+            PIN_PINZA: 80
+        }
         self.distancia = 999
         self.mag1 = [0.0, 0.0, 0.0]
         self.mag2 = [0.0, 0.0, 0.0]
@@ -21,6 +32,7 @@ class ArmController:
         self.esp32 = None
         self.running = True
         self.en_emergencia = False  # Nueva variable de estado
+        self.busy = False # Flag para indicar movimiento en curso
         self.lock = threading.Lock()
         self.event_ok = threading.Event() # Evento para esperar el 'OK'
         
@@ -119,9 +131,9 @@ class ArmController:
                                     with self.lock:
                                         self.mag1 = vals
                                         
-                                        # PRIORIDAD: Verificar el ángulo del servo de la pinza (Pin 12)
+                                        # PRIORIDAD: Verificar el ángulo del servo de la pinza
                                         # Si la pinza está abierta (>= 80), no puede estar "CON_OBJETO"
-                                        angulo_pinza = self.estado_actual.get(12, 80)
+                                        angulo_pinza = self.estado_actual.get(PIN_PINZA, 80)
                                         
                                         if angulo_pinza >= 80:
                                             self.estado_pinza = "ABIERTA"
@@ -148,6 +160,8 @@ class ArmController:
         if self.en_emergencia:
             print("[BRAZO] Comando ignorado: El sistema está en PARO DE EMERGENCIA.")
             return
+
+        with self.lock: self.busy = True
 
         necesarios = []
         for p, a in movimientos:
@@ -180,25 +194,32 @@ class ArmController:
         if esperar:
             if not self.event_ok.wait(timeout=10.0): # Timeout de seguridad más largo
                 print("[BRAZO] Advertencia: Timeout esperando OK")
+        
+        with self.lock: self.busy = False
 
     def centrar_ibvs(self, error_x, error_y, paso_x=1, paso_y=1):
-        """Ajuste fino basado en visión (IBVS)."""
+        """Ajuste fino basado en visión (IBVS) con compensación de muñeca integrada."""
         tolerancia = 8
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
             return True
             
         cmds = []
-        if error_x > tolerancia: cmds.append((0, self.estado_actual[0] + paso_x))
-        elif error_x < -tolerancia: cmds.append((0, self.estado_actual[0] - paso_x))
+        if error_x > tolerancia: cmds.append((PIN_BASE, self.estado_actual[PIN_BASE] - paso_x))
+        elif error_x < -tolerancia: cmds.append((PIN_BASE, self.estado_actual[PIN_BASE] + paso_x))
         
-        if error_y > tolerancia: cmds.append((15, self.estado_actual[15] + paso_y))
-        elif error_y < -tolerancia: cmds.append((15, self.estado_actual[15] - paso_y))
+        # Compensación vertical: Si bajamos (error_y < 0), subimos muñeca (paso_y)
+        # Se ha fortalecido la compensación sumando un pequeño extra o usando un paso más firme
+        if error_y > tolerancia: 
+            cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] + paso_y))
+        elif error_y < -tolerancia: 
+            # Si la pinza debe bajar, subimos la muñeca un poco más agresivamente para compensar el descenso
+            cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] - (paso_y + 1)))
         
         if cmds: self.mover_tiempo(cmds, esperar=False) # No esperamos OK en IBVS para mayor velocidad
         return False
 
     def centrar_proporcional(self, error_x, error_y):
-        """Ajuste inteligente basado en un controlador Proporcional."""
+        """Ajuste inteligente basado en un controlador Proporcional con compensación reforzada."""
         tolerancia = 10
         kp_x = 0.03 # Aumentado levemente
         kp_y = 0.02  
@@ -216,8 +237,8 @@ class ArmController:
             paso_x = 1 if error_x > 0 else -1
 
         if abs(error_x) > tolerancia:
-            nuevo_angulo = self.estado_actual[0] + paso_x
-            cmds.append((0, nuevo_angulo))
+            nuevo_angulo = self.estado_actual[PIN_BASE] - paso_x
+            cmds.append((PIN_BASE, nuevo_angulo))
 
         paso_y = int(error_y * kp_y)
         if abs(paso_y) > max_paso:
@@ -227,13 +248,19 @@ class ArmController:
 
         if abs(error_y) > tolerancia:
             self.intentos_y += 1
-            nuevo_angulo_15 = self.estado_actual[15] + paso_y
-            cmds.append((15, nuevo_angulo_15))
+            # Compensación reforzada: Si el error_y es negativo (bajar), 
+            # el ajuste de la muñeca (PIN_MUÑECA) es más fuerte hacia arriba.
+            ajuste_muñeca = paso_y
+            if paso_y < 0: # Caso descenso
+                ajuste_muñeca -= 1 # Reforzar subida de muñeca en 1 grado extra
+                
+            nuevo_angulo_15 = self.estado_actual[PIN_MUÑECA] + ajuste_muñeca
+            cmds.append((PIN_MUÑECA, nuevo_angulo_15))
             
             if self.intentos_y >= 5:
                 paso_6 = 1 if error_y > 0 else -1
-                nuevo_angulo_6 = self.estado_actual[6] + paso_6
-                cmds.append((6, nuevo_angulo_6))
+                nuevo_angulo_6 = self.estado_actual[PIN_CODO] + paso_6
+                cmds.append((PIN_CODO, nuevo_angulo_6))
                 self.intentos_y = 0 
         else:
             self.intentos_y = 0

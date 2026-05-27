@@ -76,8 +76,9 @@ def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSE
         
         # Refinar máscara de pastillas
         pills_mask = cv2.morphologyEx(pills_mask, cv2.MORPH_OPEN, kernel)
-        pills_mask = cv2.morphologyEx(pills_mask, cv2.MORPH_DILATE, kernel)
-
+        pills_mask = cv2.morphologyEx(pills_mask, cv2.MORPH_CLOSE, kernel)
+        pills_mask = cv2.erode(pills_mask, None, iterations=1) # Eliminar motas de ruido pequeñas
+        
         # 4. Filtrar por Circularidad (Evita sombras irregulares)
         cnts_pills, _ = cv2.findContours(pills_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         valid_pills = []
@@ -87,7 +88,7 @@ def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSE
             if perimetro == 0 or area < 80: continue # Bajamos un poco el área mínima
             
             circularidad = (4 * np.pi * area) / (perimetro ** 2)
-            if circularidad > 0.50: # Umbral relajado para comprimidos (antes 0.65)
+            if circularidad > 0.55: # Umbral relajado para comprimidos (antes 0.65)
                 valid_pills.append(c)
 
         if valid_pills:
@@ -101,6 +102,38 @@ def process_pastillas_frame(frame, color_base, offset_y=OFFSET_Y, offset_x=OFFSE
 
     cv2.circle(frame, (cx_p, cy_p), 8, (255, 0, 0), -1)
     return frame, error_tracking
+
+def verify_pill_in_gripper(frame):
+    """
+    Verifica visualmente si hay un objeto rosa (pastilla) entre las pinzas.
+    Se enfoca en el área central donde debería estar la pinza.
+    """
+    alto, ancho = frame.shape[:2]
+    # ROI central: donde la pinza es más visible (ajustar según offset real)
+    roi_y1, roi_y2 = int(alto * 0.4), int(alto * 0.8)
+    roi_x1, roi_x2 = int(ancho * 0.3), int(ancho * 0.7)
+    roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
+    
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    
+    # Rango refinado para la pastilla Rosa/Magenta (más específico)
+    lower_pink = np.array([145, 80, 70])
+    upper_pink = np.array([170, 255, 255])
+    mask = cv2.inRange(hsv, lower_pink, upper_pink)
+    
+    # Limpieza morfológica
+    kernel = np.ones((3,3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    
+    pink_pixels = cv2.countNonZero(mask)
+    
+    # Debug visual en el frame original
+    cv2.rectangle(frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (255, 255, 0), 2)
+    cv2.putText(frame, f"Pink Px: {pink_pixels}", (roi_x1, roi_y1 - 10), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+    
+    # Requiere al menos 150 píxeles para confirmar (ajustado de 100)
+    return pink_pixels > 150
 
 def iniciar_deteccion(camara):
     """ Ajusta el brillo del LED para la fase de búsqueda de pastillas (48) """

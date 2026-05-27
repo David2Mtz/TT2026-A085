@@ -78,10 +78,14 @@ def detect_mouth_landmarks_by_color(frame):
             
             if dist_sum < min_dist_sum:
                 # El área debe ser suficiente para no ser un punto de ruido
-                hull = cv2.convexHull(combo_pts.astype(np.int32))
-                if cv2.contourArea(hull) > 150:
-                    min_dist_sum = dist_sum
-                    best_landmarks = list(combo)
+                try:
+                    hull = cv2.convexHull(combo_pts.astype(np.int32))
+                    if cv2.contourArea(hull) > 150:
+                        min_dist_sum = dist_sum
+                        best_landmarks = list(combo)
+                except Exception as e:
+                    # Si falla el hull (puntos colineales, etc), ignorar esta combinación
+                    continue
         landmarks = best_landmarks
     else:
         landmarks = candidates

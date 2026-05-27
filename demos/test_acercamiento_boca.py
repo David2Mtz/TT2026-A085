@@ -69,10 +69,10 @@ def main():
                 
                 targets = {}
                 
-                # 1. Centrado Horizontal (S0)
+                # 1. Centrado Horizontal (S4)
                 if abs(ex) > 8:
                     paso_x = 2 if abs(ex) > 60 else 1
-                    targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
+                    targets[4] = brazo.estado_actual[4] + (paso_x if ex > 0 else -paso_x)
                 
                 # 2. Centrado Vertical Dinámico (S15 + S6)
                 if abs(ey) > 10:
@@ -110,7 +110,7 @@ def main():
                 contador_sondeo += 1
                 if contador_sondeo < 100:
                     offset = 8 * np.sin(contador_sondeo * 0.15)
-                    brazo.mover_tiempo([(0, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
+                    brazo.mover_tiempo([(4, POSICIONES["OBSERVACION_MANIQUI"][0][1] + offset)], esperar=False)
                     cv2.putText(frame_vis, "SONDEO DE BOCA...", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
                 else:
                     cv2.putText(frame_vis, "BOCA PERDIDA", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
