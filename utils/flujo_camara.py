@@ -10,49 +10,56 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class CameraSerial:
-    def __init__(self, port=None, baud_rate=460800):
+    def __init__(self, port=None, baud_rate=None):
         self.port = port or os.getenv('PUERTO_CAMARA', '/dev/cu.usbserial-210')
-        self.baud_rate = baud_rate
+        self.baud_rate = baud_rate or int(os.getenv('BAUD_CAMARA', 460800))
         self.ser = None
-        self.last_brightness = -1 # Cache para evitar saturar el puerto
         
-        # Ajustes de imagen manuales
-        self.contrast = 1.1   # 1.0 = original, >1.0 = más contraste
-        self.saturation = 1.2  # 1.0 = original, >1.0 = más saturación
+        # Ajustes de imagen manuales (Neutrales)
+        self.contrast = 1.0   
+        self.saturation = 1.0 
+        self.green_gain = 0.9 # Reducir verdes para evitar falsos positivos en sombras
+        self.blue_gain = 0.9  # Reducir azules para balancear la imagen
         
         self.conectar()
 
     def conectar(self):
         print(f"Intentando abrir puerto serial de cámara: {self.port} a {self.baud_rate}...")
         try:
-            # Añadimos un pequeño log antes de la llamada bloqueante
             print("   [DEBUG] Abriendo objeto Serial...")
-            self.ser = serial.Serial(self.port, self.baud_rate, timeout=1.0)
-            print("   [DEBUG] Puerto abierto, esperando 2s para estabilización...")
-            time.sleep(2) 
+            self.ser = serial.Serial(self.port, self.baud_rate, timeout=2.0)
+            self.ser.setDTR(True)
+            self.ser.setRTS(True)
+            print("   [DEBUG] Puerto abierto, esperando 3s para estabilización...")
+            time.sleep(3) 
             self.ser.reset_input_buffer() 
-            print("Cámara ESP32 conectada exitosamente.")
+            print("Cámara XIAO ESP32-S3 conectada exitosamente.")
         except Exception as e:
             print(f"Error crítico al abrir el puerto de cámara: {e}")
             self.ser = None
             
-    def set_exposure(self, value):
-        """ Envía el comando 'E' seguido de 2 bytes (Big Endian) """
-        if self.ser and self.ser.is_open:
-            val = max(0, min(1200, int(value)))
-            self.ser.write(b'E' + struct.pack('>H', val))
-            self.ser.flush()
-
     def apply_image_adjustments(self, frame):
-        """ Aplica contraste y saturación de forma manual """
+        """ Aplica contraste, saturación y balance de blancos de forma manual """
         if frame is None:
             return None
-            
-        # 1. Aplicar Contraste (y un poco de brillo si se deseara, vía beta)
-        # cv2.convertScaleAbs(src, alpha, beta) -> alpha es el factor de contraste
-        frame = cv2.convertScaleAbs(frame, alpha=self.contrast, beta=0)
-        
-        # 2. Aplicar Saturación
+
+        # 1. Compensación de Tinte (Balance de Color Manual)
+        if self.green_gain != 1.0 or self.blue_gain != 1.0:
+            # Separar canales (BGR)
+            b, g, r = cv2.split(frame)
+            # Escalar canal verde si es necesario
+            if self.green_gain != 1.0:
+                g = (g.astype("float32") * self.green_gain).clip(0, 255).astype("uint8")
+            # Escalar canal azul si es necesario
+            if self.blue_gain != 1.0:
+                b = (b.astype("float32") * self.blue_gain).clip(0, 255).astype("uint8")
+            frame = cv2.merge([b, g, r])
+
+        # 2. Contraste
+        if self.contrast != 1.0:
+            frame = cv2.convertScaleAbs(frame, alpha=self.contrast, beta=0)
+
+        # 3. Saturación
         if self.saturation != 1.0:
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype("float32")
             (h, s, v) = cv2.split(hsv)
@@ -68,89 +75,73 @@ class CameraSerial:
             return None
 
         for intento in range(max_intentos):
-            # No reseteamos el buffer de entrada aquí para no borrar la cabecera si ya llegó
-            self.ser.write(b'R')
+            # Limpiar antes de pedir
+            if self.ser.in_waiting > 10000:
+                self.ser.reset_input_buffer()
+                
+            self.ser.write(b'R\n')
             self.ser.flush()
 
-            # 1. Esperar la cabecera usando read_until
+            # 1. Esperar la cabecera
+            # Usamos read_until pero con un timeout interno más corto para no bloquear
             sync = self.ser.read_until(b'IMG:')
             if not sync.endswith(b'IMG:'):
-                # Si falla, entonces sí limpiamos para el siguiente intento
-                self.ser.reset_input_buffer()
-                time.sleep(0.05)
+                if sync:
+                    try:
+                        decoded = sync.decode(errors='ignore').strip()
+                        if decoded:
+                            print(f"DEBUG: Recibido texto en lugar de imagen: {decoded}")
+                    except:
+                        print(f"DEBUG: Recibido basura binaria ({len(sync)} bytes)")
                 continue
-
 
             # 2. Leer el tamaño
             size_bytes = self.ser.read(4)
             if len(size_bytes) != 4:
-                # print(f"[Intento {intento+1}] No se pudieron leer los 4 bytes de tamaño.")
+                print("DEBUG: Error al leer tamaño (bytes incompletos)")
                 continue
             
             img_size = struct.unpack('<I', size_bytes)[0]
-            if img_size == 0 or img_size > 500000: 
-                # print(f"[Intento {intento+1}] Tamaño de imagen anómalo: {img_size} bytes.")
+            if img_size == 0 or img_size > 1000000: # Aumentamos límite para RGB VGA (614,400 bytes)
                 continue
 
-            # 3. Leer exactamente los bytes requeridos por trozos
+            # 3. Leer bytes por trozos
             img_data = bytearray()
             tiempo_inicio = time.time()
-            
             while len(img_data) < img_size:
                 faltan = img_size - len(img_data)
                 chunk = self.ser.read(min(faltan, 4096)) 
-                
                 if not chunk:
-                    if time.time() - tiempo_inicio > 1.0:
-                        break
+                    if time.time() - tiempo_inicio > 1.0: break
                 else:
                     img_data.extend(chunk)
                     tiempo_inicio = time.time()
             
             if len(img_data) != img_size:
-                # print(f"[Intento {intento+1}] Frame incompleto. Llegaron {len(img_data)} de {img_size} bytes.")
                 continue
 
             # 4. Decodificar
-            frame_array = np.frombuffer(img_data, dtype=np.uint8)
-            frame = cv2.imdecode(frame_array, cv2.IMREAD_COLOR)
+            frame = None
+            if img_data[0] == 0xFF and img_data[1] == 0xD8: # JPEG
+                frame = cv2.imdecode(np.frombuffer(img_data, dtype=np.uint8), cv2.IMREAD_COLOR)
+            elif img_size == 153600: # RGB565 QVGA (320x240)
+                width, height = 320, 240
+                frame_array = np.frombuffer(img_data, dtype=np.uint16).byteswap().view(np.uint8).reshape((height, width, 2))
+                frame = cv2.cvtColor(frame_array, cv2.COLOR_BGR5652BGR)
+            elif img_size == 236800: # RGB565 CIF (400x296)
+                width, height = 400, 296
+                frame_array = np.frombuffer(img_data, dtype=np.uint16).byteswap().view(np.uint8).reshape((height, width, 2))
+                frame = cv2.cvtColor(frame_array, cv2.COLOR_BGR5652BGR)
+            elif img_size == 614400: # RGB565 VGA (640x480)
+                width, height = 640, 480
+                frame_array = np.frombuffer(img_data, dtype=np.uint16).byteswap().view(np.uint8).reshape((height, width, 2))
+                frame = cv2.cvtColor(frame_array, cv2.COLOR_BGR5652BGR)
 
             if frame is not None:
-                # --- Rotación de Imagen ---
                 frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                
-                # --- Ajustes Manuales ---
                 frame = self.apply_image_adjustments(frame)
-                
                 return frame 
-            else:
-                # print(f"[Intento {intento+1}] Error al decodificar la imagen.")
-                pass
-                
         return None
-
-    def set_led_brightness(self, level):
-        """
-        Envía un comando para ajustar el brillo del LED Flash.
-        Solo envía el comando si el nivel es distinto al anterior.
-        """
-        if not self.ser or not self.ser.is_open:
-            return
-
-        try:
-            # Asegurar que el nivel esté en el rango correcto
-            level = max(0, min(255, int(level)))
-            
-            # Solo enviar si el nivel cambió (evita saturar el buffer serial)
-            if level == self.last_brightness:
-                return
-
-            # Enviar comando 'L' seguido del byte de brillo
-            self.ser.write(b'L' + struct.pack('B', level))
-            self.ser.flush()
-            self.last_brightness = level
-        except Exception as e:
-            print(f"Error al ajustar el brillo del LED: {e}")
 
     def liberar(self):
         if self.ser and self.ser.is_open:

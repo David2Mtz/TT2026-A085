@@ -86,8 +86,8 @@ def main():
             cv2.putText(frame_vis, f"COORD Z (ToF): {z_coord}mm", (10, 30), 
                         cv2.FONT_HERSHEY_DUPLEX, 0.8, color_z, 2)
             
-            s0, s1, s6, s15 = brazo.estado_actual[0], brazo.estado_actual[1], brazo.estado_actual[6], brazo.estado_actual[15]
-            cv2.putText(frame_vis, f"S0:{s0} | S1:{s1} | S6:{s6} | S15:{s15}", (10, 60), 
+            s4, s1, s6, s15 = brazo.estado_actual[4], brazo.estado_actual[1], brazo.estado_actual[6], brazo.estado_actual[15]
+            cv2.putText(frame_vis, f"S4:{s4} | S1:{s1} | S6:{s6} | S15:{s15}", (10, 60), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             # =================================================
@@ -137,18 +137,18 @@ def main():
                     targets = {} 
                     tolerancia_vision = 12
                     
-                    # 1. Ajuste Horizontal (Base - S0)
+                    # 1. Ajuste Horizontal (Base - S4)
                     if 95 <= z_coord <= 120:
                         # Fase Final: Aplicar desfase de +10px a la derecha (ex + 10)
                         error_x_ajustado = ex + 20
                         if abs(error_x_ajustado) > tolerancia_vision:
                             paso_x = 1 if error_x_ajustado > 0 else -1
-                            targets[0] = brazo.estado_actual[0] + paso_x
+                            targets[4] = brazo.estado_actual[4] + paso_x
                     else:
                         # Ajuste Horizontal normal
                         if abs(ex) > tolerancia_vision:
                             paso_x = 1 if ex > 0 else -1
-                            targets[0] = brazo.estado_actual[0] + paso_x
+                            targets[4] = brazo.estado_actual[4] + paso_x
                     
                     # 2. SEGUNDO OFFSET Y AJUSTE ÚNICO PIN 15 (Fase Final: 110mm - 90mm)
                     angulo_15 = brazo.estado_actual[15]
@@ -218,12 +218,12 @@ def main():
                     ajuste_manual_y += 1
                 elif key == ord('s'):
                     brazo.mover_tiempo([(15, brazo.estado_actual[15] - 1)], esperar=False)
-                    ajuste_manual_y -= 1
+                    ajuste_manual_y -= 0
                 elif key == ord('a'):
-                    brazo.mover_tiempo([(0, brazo.estado_actual[0] - 1)], esperar=False)
+                    brazo.mover_tiempo([(4, brazo.estado_actual[4] - 1)], esperar=False)
                     ajuste_manual_x -= 1
                 elif key == ord('d'):
-                    brazo.mover_tiempo([(0, brazo.estado_actual[0] + 1)], esperar=False)
+                    brazo.mover_tiempo([(4, brazo.estado_actual[4] + 1)], esperar=False)
                     ajuste_manual_x += 1
 
                 if key == ord('c'):
