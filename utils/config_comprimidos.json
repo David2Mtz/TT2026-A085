@@ -1,0 +1,19 @@
+{
+    "mapeo_comprimidos": [
+        {
+            "id_interno": 1,
+            "nombre": "ConmprimidoRojo",
+            "color_asignado": "Rojo"
+        },
+        {
+            "id_interno": 2,
+            "nombre": "ConmprimidoVerde",
+            "color_asignado": "Verde"
+        },
+        {
+            "id_interno": 3,
+            "nombre": "ComprimidoAzul",
+            "color_asignado": "Azul"
+        }
+    ]
+}

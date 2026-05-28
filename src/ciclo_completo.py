@@ -225,7 +225,7 @@ def main():
                         # --- PRIORIDAD X (Eje S0) ---
                         if abs(ex) > TOLERANCIA_CENTRADO:
                             # Paso agresivo si el error es grande (>40px)
-                            paso_x = 1 if abs(ex) > 10 else 0.5
+                            paso_x = 2 if abs(ex) > 10 else 2
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
                         # --- EJE Y (S15 + S6) ---
@@ -430,7 +430,7 @@ def main():
                     if not lockon_activado_boca:
                         # Centrado Horizontal (S0)
                         if abs(ex) > 8:
-                            paso_x = 2 if abs(ex) > 60 else 1
+                            paso_x = 2 if abs(ex) > 60 else 2
                             targets[0] = brazo.estado_actual[0] + (paso_x if ex > 0 else -paso_x)
                         
                         # Centrado Vertical Dinámico (S15 + S6)

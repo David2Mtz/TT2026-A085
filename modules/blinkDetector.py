@@ -1,4 +1,5 @@
 # modules/3blinks.py
+import os
 import cv2
 import dlib
 import imutils
@@ -17,8 +18,10 @@ class BlinkDetector:
         
         # Inicializar dlib
         self.detector = dlib.get_frontal_face_detector()
-        # Ruta corregida al modelo
-        self.landmark_predict = dlib.shape_predictor('models/shape_predictor_68_face_landmarks.dat')
+        # Ruta corregida al modelo usando la raíz del proyecto
+        base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        predictor_path = os.path.join(base_path, 'models', 'shape_predictor_68_face_landmarks.dat')
+        self.landmark_predict = dlib.shape_predictor(predictor_path)
         (self.L_start, self.L_end) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
         (self.R_start, self.R_end) = face_utils.FACIAL_LANDMARKS_IDXS['right_eye']
         
@@ -48,16 +51,10 @@ class BlinkDetector:
         EAR = (y1 + y2) / x1
         return EAR
 
-    def check_for_trigger(self):
-        """
-        Captura un frame de la laptop y verifica si se alcanzó el número de parpadeos.
-        """
-        if self.cam is None:
-            return False
-
-        ret, frame = self.cam.read()
-        if not ret:
-            return False
+    def process_frame(self, frame):
+        """Procesa un frame y retorna si se alcanzó el trigger de parpadeo."""
+        if frame is None:
+            return False, frame
 
         # Reducir aún más para el detector dlib (que es lo más pesado)
         img_small = imutils.resize(frame, width=250)
@@ -71,13 +68,11 @@ class BlinkDetector:
         scale = frame.shape[1] / img_small.shape[1]
 
         for face in faces:
-            # Reescalar el rectángulo de la cara para predecir sobre el frame original
             scaled_face = dlib.rectangle(
                 int(face.left() * scale), int(face.top() * scale),
                 int(face.right() * scale), int(face.bottom() * scale)
             )
             
-            # Procesar landmarks sobre escala original o gris
             frame_gray_full = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             shape = self.landmark_predict(frame_gray_full, scaled_face)
             shape = face_utils.shape_to_np(shape)
@@ -103,9 +98,19 @@ class BlinkDetector:
                 trigger = True
                 self.blink_timestamps = []
 
-        # Mostrar feedback (usamos el frame original para que se vea bien)
         cv2.putText(frame, f"Blinks: {len(self.blink_timestamps)}", (10, 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        cv2.imshow("Detector de Parpadeo", frame)
         
+        return trigger, frame
+
+    def check_for_trigger(self):
+        """Captura un frame de la cámara y verifica el trigger de parpadeo."""
+        if self.cam is None:
+            return False
+
+        ret, frame = self.cam.read()
+        if not ret:
+            return False
+
+        trigger, _ = self.process_frame(frame)
         return trigger
