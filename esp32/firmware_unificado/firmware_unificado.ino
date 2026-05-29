@@ -22,7 +22,7 @@ Adafruit_MLX90393 mag1 = Adafruit_MLX90393();
 #define SERVOMAX  575 
 
 // Estos valores son tu posición de HOME
-int angulosActuales[16] = {90, 180, 0, 0, 90, 0, 140, 0, 0, 0, 0, 90, 80, 90, 90, 90};
+int angulosActuales[16] = {90, 180, 0, 0, 90, 0, 140, 90, 0, 0, 0, 90, 0, 90, 90, 90};
 int retardosSeguros[16] = {0, 10, 10, 10, 0, 10, 12, 10, 10, 10, 0, 0, 1, 0, 10, 10}; 
 
 unsigned long lastSensorTime = 0;

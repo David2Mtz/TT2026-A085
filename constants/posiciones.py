@@ -11,7 +11,7 @@ POSICIONES = {
         (PIN_CODO, 140), # Codo
         (PIN_MUÑECA, 90),  # Muñeca (Pitch) 0 HACIA ARRIBA, 180 HACIA ABAJO
         (PIN_ROTADOR, 90),  # Rotador (Roll)
-        (PIN_PINZA, 80)    # Pinza (Abierta: 80, Cerrada: 0)
+        (PIN_PINZA, 0)    # Pinza (Abierta: 80, Cerrada: 0)
     ],
 
     # Se llama en el estado: OBSERVAR_COLORES
@@ -19,8 +19,8 @@ POSICIONES = {
     "OBSERVACION": [
         (PIN_BASE, 90),   # Base (Frente)
         (PIN_CODO, 60),  # Codo flexionado para apuntar la cámara
-        (PIN_HOMBRO, 70),  # Hombro inclinado sobrela mesa
-        (PIN_MUÑECA, 170), # Muñeca (Pitch) apuntando hacia abajo
+        (PIN_HOMBRO, 80),  # Hombro inclinado sobrela mesa
+        (PIN_MUÑECA, 140), # Muñeca (Pitch) apuntando hacia abajo
         (PIN_ROTADOR, 0),  # Rotador (Roll) nivelado
         (PIN_PINZA, 80)   # Pinza abierta
     ],
@@ -38,7 +38,7 @@ POSICIONES = {
     "OBSERVACION_MANIQUI": [
         (PIN_BASE, 170),   # Regresar base al frente
         (PIN_CODO, 105), 
-        (PIN_MUÑECA, 70),    # Muñeca (Pitch)
+        (PIN_MUÑECA, 90),    # Muñeca (Pitch)
         (PIN_HOMBRO, 140), # Posición hacia la cara del usuario
         (PIN_ROTADOR, 0), # MANTENER NIVELADO PARA MIRAR AL FRENTE (Sin invertir)
         (PIN_PINZA, 0)     # Pinza (Cerrada)
