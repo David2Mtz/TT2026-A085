@@ -356,7 +356,7 @@ def main():
 
                                 if lockon_activado:
                                     # Bajada vertical directa al límite físico S1=69
-                                    targets[PIN_HOMBRO] = 66
+                                    targets[PIN_HOMBRO] = 67
                                     if brazo.estado_actual[PIN_MUÑECA] > 20:
                                         targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] - 1
                                     cv2.putText(frame_vis, "LOCK-ON: DESCENSO DIRECTO...", (10, 80), 
