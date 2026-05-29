@@ -1,7 +1,7 @@
 # modules/sujecion_evaluator.py
 
 class SujecionEvaluator:
-    def __init__(self, umbral_tolerancia=45, umbral_colision=15):
+    def __init__(self, umbral_tolerancia=45, umbral_colision=8):
         self.baseline_recoleccion = None
         self.baselines_vacio = {} # Diccionario para firmas de vacío por estado
         self.norma_vacio_cerrado = None # Firma genérica (legacy)
@@ -13,7 +13,7 @@ class SujecionEvaluator:
         
         self.historial_normas = []
         self.hubo_colision = False
-        self.monitoreo_activo = True
+        self.monitoreo_activo = False # Iniciar desactivado
         self.ultimo_delta = 0.0
 
         # Offsets empíricos de compensación por movimiento (uT)
@@ -85,15 +85,20 @@ class SujecionEvaluator:
         
         # --- 1. DETECCIÓN DE COLISIÓN (Basado en cambio brusco) ---
         if self.monitoreo_activo:
-            if len(self.historial_normas) >= 3:
+            if len(self.historial_normas) >= 10:
                 norma_promedio = sum(self.historial_normas) / len(self.historial_normas)
                 self.ultimo_delta = abs(norma_actual - norma_promedio)
                 
+                # Debug de ruido/sensibilidad
+                if self.ultimo_delta > 0.5:
+                    print(f"[MAG DEBUG] Delta: {self.ultimo_delta:.2f} | Norma: {norma_actual:.2f} | Prom: {norma_promedio:.2f}")
+
                 if self.ultimo_delta > self.umbral_colision:
                     self.hubo_colision = True
+                    print(f"[EVALUADOR] !!! COLISIÓN DETECTADA !!! Delta: {self.ultimo_delta:.2f} (Umbral: {self.umbral_colision})")
                     
             self.historial_normas.append(norma_actual)
-            if len(self.historial_normas) > 3: self.historial_normas.pop(0)
+            if len(self.historial_normas) > 10: self.historial_normas.pop(0)
 
         # --- 2. DETECCIÓN DE PRESENCIA (Basado en baseline + compensación) ---
         if self.baseline_recoleccion is None: 
