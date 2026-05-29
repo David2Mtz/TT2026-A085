@@ -34,7 +34,7 @@ load_dotenv()
 
 PUERTO_CAMARA = os.getenv('PUERTO_CAMARA', '/dev/ttyACM0')
 PUERTO_BRAZO = os.getenv('PUERTO_BRAZO', '/dev/ttyUSB0')
-COLOR_OBJETIVO = os.getenv('COLOR_OBJETIVO', 'Rojo')
+COLOR_OBJETIVO = os.getenv('COLOR_OBJETIVO', 'Azul')
 
 class Estado:
     HOME = "HOME"
@@ -73,8 +73,8 @@ def main():
     
     # --- CONFIGURACIÓN DE RECOLECCIÓN ---
     Z_UMBRAL_LOCKON = 135    
-    Z_LIMITE_FINAL = 95  
-    Z_LIMITE_ENTREGA = 180
+    Z_LIMITE_FINAL = 89  
+    Z_LIMITE_ENTREGA = 200
     TOLERANCIA_CENTRADO = 12 
     lockon_activado = False  
     lockon_activado_boca = False
@@ -138,11 +138,8 @@ def main():
         while True:
             ahora = time.time()
             
-            # --- POLLING DE TECLADO SIEMPRE ACTIVO ---
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'): 
-                print("[SISTEMA] 'Q' presionada. Saliendo...")
-                break
+            # --- POLLING DE TECLADO --- (Movido al final para asegurar captura tras imshow)
+            key = -1 
 
             # Control de Encendido/Apagado lógico de la cámara
             if camara_activa:
@@ -152,9 +149,9 @@ def main():
                     frame_placeholder = np.zeros((480, 640, 3), dtype=np.uint8)
                     cv2.putText(frame_placeholder, "ESPERANDO CAMARA...", (150, 240), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-                    cv2.imshow('Ciclo Autonomo Inteligente', frame_placeholder)
-                    continue
-                frame_vis = frame.copy()
+                    frame_vis = frame_placeholder
+                else:
+                    frame_vis = frame.copy()
             else:
                 # Mostrar frame de pausa si la cámara está apagada
                 frame_vis = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -181,9 +178,11 @@ def main():
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
 
-            # --- DETECCIÓN DE COLISIÓN (RF-08) ---
-            if brazo.estado_pinza == "COLISION" and estado_actual != Estado.EMERGENCIA:
-                print("\n!!! ALERTA: COLISIÓN / IMPACTO DETECTADO EN LA PINZA !!!")
+            # --- DETECCIÓN DE COLISIÓN (Solo activa en SEGUIMIENTO_BOCA) ---
+            if estado_actual == Estado.SEGUIMIENTO_BOCA and brazo.colision_detectada and estado_actual != Estado.EMERGENCIA:
+                print("\n" + "!"*50)
+                print("!!! ALERTA: COLISIÓN / IMPACTO DETECTADO DURANTE ENTREGA !!!")
+                print("!"*50 + "\n")
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
 
@@ -209,6 +208,8 @@ def main():
                 lockon_activado = False
                 pastilla_en_transporte = False
                 camara_activa = False # APAGAR cámara al volver a casa
+                brazo.evaluador_agarre.hubo_colision = False # Resetear colisiones al estar en casa
+                brazo.evaluador_agarre.monitoreo_activo = False # Desactivar monitoreo en HOME
                 
                 if not macro_movimiento_hecho:
                     brazo.mover_a_estado("HOME", forzar=True)
@@ -355,18 +356,18 @@ def main():
                                         lockon_activado = True
 
                                 if lockon_activado:
-                                    # Bajada vertical directa al límite físico S1=69
-                                    targets[PIN_HOMBRO] = 67
+                                    # Bajada vertical grado a grado hasta el límite físico S1=66
+                                    targets[PIN_HOMBRO] = max(65, brazo.estado_actual[PIN_HOMBRO] - 1)
                                     if brazo.estado_actual[PIN_MUÑECA] > 20:
                                         targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] - 1
-                                    cv2.putText(frame_vis, "LOCK-ON: DESCENSO DIRECTO...", (10, 80), 
+                                    cv2.putText(frame_vis, "LOCK-ON: DESCENSO GRADUAL...", (10, 80), 
                                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                                 else:
                                     cv2.putText(frame_vis, "CENTRANDO FINAL...", (10, 80), 
                                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
                             # --- CONDICIÓN DE PARADA FINAL ---
-                            if brazo.estado_actual[PIN_HOMBRO] <= 67 or z_coord <= Z_LIMITE_FINAL:
+                            if brazo.estado_actual[PIN_HOMBRO] <= 65 or z_coord <= Z_LIMITE_FINAL:
                                 print(f"[ToF] POSICION DE AGARRE ALCANZADA ({z_coord}mm).")
                                 
                                 # --- COMANDO DE FRENO ACTIVO ---
@@ -382,8 +383,14 @@ def main():
 
                             # --- EJECUCIÓN DE MOVIMIENTOS ---
                             if targets:
-                                brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
-                                last_move_time = ahora
+                                # En LOCK-ON forzamos lentitud, en centrado normal usamos el ritmo del buffer
+                                if lockon_activado:
+                                    if (ahora - last_move_time) > INTERVALO_MOVIMIENTO:
+                                        brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                                        last_move_time = ahora
+                                else:
+                                    brazo.mover_tiempo([(p, a) for p, a in targets.items()], esperar=False)
+                                    last_move_time = ahora
 
                     # Resetear contadores de pérdida si hay detección o lock-on
                     contador_pastilla_perdida = 0
@@ -435,8 +442,6 @@ def main():
                 
             elif estado_actual == Estado.ESPERA_CONFIRMACION_AGARRE:
                 cv2.putText(frame_vis, "PREPARANDO AGARRE... ESPERE", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-                cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
-                cv2.waitKey(1)
                 
                 # 1. Esperar 1 segundo antes de cerrar
                 print("\n[CONTROL] Pausa de 1s antes de cerrar...")
@@ -446,9 +451,9 @@ def main():
                 print("[CONTROL] Compensando altura y cerrando pinza...")
                 
                 # Desplazamiento forzado manual: Subir muñeca 15 grados antes de cerrar
-                nuevo_s7 = max(0, brazo.estado_actual[PIN_MUÑECA] - 14)
+                nuevo_s7 = max(0, brazo.estado_actual[PIN_MUÑECA] - 7)
                 brazo.mover_tiempo([(PIN_MUÑECA, nuevo_s7)], esperar=True)
-                time.sleep(1.0)
+                time.sleep(3.0)
                 
                 brazo.mover_tiempo([(PIN_PINZA, 0)], forzar=True, esperar=True) 
                 time.sleep(0.5)
@@ -522,8 +527,6 @@ def main():
             elif estado_actual == Estado.CALIBRAR:
                 print("\n[MODO CALIBRAR] Estabilizando para medición de Magnetómetro (1.5s)...")
                 cv2.putText(frame_vis, "CALIBRANDO MAGNETOMETRO...", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-                cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
-                cv2.waitKey(1)
 
                 lecturas_mag = []
                 inicio_cal = time.time()
@@ -572,6 +575,9 @@ def main():
                 
                 frame_vis, coords_boca = get_mouth_coordinates(frame_vis)
                 if coords_boca:
+                    print("[CONTROL] Boca detectada. Iniciando seguimiento con monitoreo de colisión...")
+                    brazo.evaluador_agarre.reset() # Resetear para detectar colisiones frescas
+                    brazo.evaluador_agarre.monitoreo_activo = True # ACTIVAR MONITOREO SOLO AQUÍ
                     estado_actual = Estado.SEGUIMIENTO_BOCA
                     macro_movimiento_hecho = False
                     buffer_ex.clear()
@@ -729,6 +735,7 @@ def main():
 
             elif estado_actual == Estado.ENTREGA:
                 sosteniendo_y_logueando = False # Detener logueo al soltar
+                brazo.evaluador_agarre.monitoreo_activo = False # Desactivar colisiones al soltar
                 brazo.mover_tiempo([(PIN_PINZA, 80)]) # Abrir a 80
                 time.sleep(1)
                 estado_actual = Estado.HOME
@@ -758,6 +765,7 @@ def main():
                     macro_movimiento_hecho = False 
                 elif key == ord('q'):
                     print("[SISTEMA] Abortando ciclo por pérdida de objeto.")
+                    brazo.evaluador_agarre.monitoreo_activo = False # Desactivar
                     estado_actual = Estado.HOME
                     macro_movimiento_hecho = False
 
@@ -797,6 +805,10 @@ def main():
             
             cv2.putText(frame_vis, f"ESTADO CICLO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                print("[SISTEMA] 'Q' presionada. Saliendo...")
+                break
 
     except KeyboardInterrupt:
         print("\nEjecución cancelada.")
