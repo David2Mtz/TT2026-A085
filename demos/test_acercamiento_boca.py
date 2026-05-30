@@ -11,7 +11,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
-from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, finalizar_deteccion
+from modules.detectorBoca import get_mouth_coordinates
 from constants.posiciones import POSICIONES
 
 load_dotenv()
@@ -36,7 +36,6 @@ def main():
     lockon_activado_boca = False
 
     print("Yendo a posición inicial de búsqueda...")
-    iniciar_deteccion(camara)
     brazo.mover_a_estado("OBSERVACION_MANIQUI", forzar=True, esperar=True)
     time.sleep(1)
 
@@ -123,7 +122,6 @@ def main():
     except KeyboardInterrupt: pass
     finally:
         print("Cerrando...")
-        finalizar_deteccion(camara)
         brazo.mover_a_estado("HOME", forzar=True, esperar=True)
         brazo.cerrar()
         camara.liberar()

@@ -181,7 +181,7 @@ def main():
             # --- DETECCIÓN DE COLISIÓN (Solo activa en SEGUIMIENTO_BOCA) ---
             if estado_actual == Estado.SEGUIMIENTO_BOCA and brazo.colision_detectada and estado_actual != Estado.EMERGENCIA:
                 print("\n" + "!"*50)
-                print("!!! ALERTA: COLISIÓN / IMPACTO DETECTADO DURANTE ENTREGA !!!")
+                print("!!! ALERTA: COLISION / IMPACTO DETECTADO DURANTE ENTREGA !!!")
                 print("!"*50 + "\n")
                 estado_actual = Estado.EMERGENCIA
                 macro_movimiento_hecho = False
@@ -357,7 +357,7 @@ def main():
 
                                 if lockon_activado:
                                     # Bajada vertical grado a grado hasta el límite físico S1=66
-                                    targets[PIN_HOMBRO] = max(65, brazo.estado_actual[PIN_HOMBRO] - 1)
+                                    targets[PIN_HOMBRO] = max(64, brazo.estado_actual[PIN_HOMBRO] - 1)
                                     if brazo.estado_actual[PIN_MUÑECA] > 20:
                                         targets[PIN_MUÑECA] = brazo.estado_actual[PIN_MUÑECA] - 1
                                     cv2.putText(frame_vis, "LOCK-ON: DESCENSO GRADUAL...", (10, 80), 
@@ -367,7 +367,7 @@ def main():
                                                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
                             # --- CONDICIÓN DE PARADA FINAL ---
-                            if brazo.estado_actual[PIN_HOMBRO] <= 65 or z_coord <= Z_LIMITE_FINAL:
+                            if brazo.estado_actual[PIN_HOMBRO] <= 64 or z_coord <= Z_LIMITE_FINAL:
                                 print(f"[ToF] POSICION DE AGARRE ALCANZADA ({z_coord}mm).")
                                 
                                 # --- COMANDO DE FRENO ACTIVO ---
@@ -790,19 +790,13 @@ def main():
             
             # --- VISUALIZACIÓN DE MAGNETÓMETRO (Solo M1 - Inferior Derecha) ---
             m1 = brazo.mag1
-            est_p = brazo.estado_pinza
-            # Colores: Verde para objeto, Amarillo para abierta, Rojo para vacía
-            col_p = (0, 255, 0) if est_p == "CON_OBJETO" else (0, 255, 255) if est_p == "ABIERTA" else (0, 0, 255)
-            
+
             # Mostrar valores crudos para calibración manual
             texto_mag_vals = f"MAG RAW -> X: {m1[0]:.1f} Y: {m1[1]:.1f} Z: {m1[2]:.1f}"
-            texto_mag_status = f"ESTADO PINZA: {est_p}"
-            
+
             cv2.putText(frame_vis, texto_mag_vals, (10, frame_vis.shape[0] - 70), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(frame_vis, texto_mag_status, (10, frame_vis.shape[0] - 50), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, col_p, 2)
-            
+
             cv2.putText(frame_vis, f"ESTADO CICLO: {estado_actual}", (10, frame_vis.shape[0] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.imshow('Ciclo Autonomo Inteligente', frame_vis)
             key = cv2.waitKey(1) & 0xFF

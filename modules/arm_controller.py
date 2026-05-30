@@ -107,7 +107,6 @@ class ArmController:
                                 print("\n" + "!"*50)
                                 print("!!! PARO DE EMERGENCIA DETECTADO !!!")
                                 print("!"*50 + "\n")
-                                # No cerramos el programa, dejamos que ciclo_completo lo maneje
                             elif "boton liberado" in linea:
                                 with self.lock:
                                     self.en_emergencia = False
@@ -132,7 +131,6 @@ class ArmController:
                                         self.mag1 = vals
                                         
                                         # PRIORIDAD: Verificar el ángulo del servo de la pinza
-                                        # Si la pinza está abierta (>= 80), no puede estar "CON_OBJETO"
                                         angulo_pinza = self.estado_actual.get(PIN_PINZA, 80)
                                         
                                         if angulo_pinza >= 80:
@@ -140,7 +138,7 @@ class ArmController:
                                             self.sujetando_objetivo = False
                                             self.evaluador_agarre.reset() 
                                         else:
-                                            # 1. Obtener estado de presencia (CON_OBJETO / VACIA)
+                                            # 1. Obtener estado de presencia
                                             resultado_presencia = self.evaluador_agarre.evaluar_agarre(
                                                 vals[0], vals[1], vals[2], 
                                                 estado_actual=self.nombre_estado_actual
@@ -165,21 +163,22 @@ class ArmController:
 
         necesarios = []
         for p, a in movimientos:
-            # Límite extendido para el Pin 13 (Roll), 180 para los demás
-            limite = 270 if p == 8 else 180
+            # Límite extendido para el Pin de rotación (270 grados), 180 para los demás
+            limite = 270 if p == PIN_ROTADOR else 180
             ang = max(0, min(limite, a))
             
             if forzar or self.estado_actual.get(p) != ang:
                 necesarios.append((p, ang))
         
-        if not necesarios: return
+        if not necesarios: 
+            with self.lock: self.busy = False
+            return
         
-        # Añadimos un espacio después de la coma para máxima compatibilidad con el firmware
         cadena = "$" + ";".join([f"{p}, {a}" for p, a in necesarios]) + "\n"
         
         with self.lock:
             try:
-                print(f"[SERIAL SEND] {cadena.strip()}") # Ver exactamente qué se envía
+                print(f"[SERIAL SEND] {cadena.strip()}") 
                 self.event_ok.clear()
                 self.esp32.write(cadena.encode('utf-8'))
                 self.esp32.flush()
@@ -188,11 +187,12 @@ class ArmController:
                 for p, a in necesarios: self.estado_actual[p] = a
             except Exception as e:
                 print(f"ERROR SERIAL: {e}")
+                self.busy = False
                 return
 
-        # Esperar confirmación para sincronizar movimientos largos (FUERA DEL LOCK)
+        # Esperar confirmación para sincronizar movimientos largos
         if esperar:
-            if not self.event_ok.wait(timeout=10.0): # Timeout de seguridad más largo
+            if not self.event_ok.wait(timeout=10.0): 
                 print("[BRAZO] Advertencia: Timeout esperando OK")
         
         with self.lock: self.busy = False
@@ -204,26 +204,29 @@ class ArmController:
             return True
             
         cmds = []
-        if error_x > tolerancia: cmds.append((PIN_BASE, self.estado_actual[PIN_BASE] - paso_x))
-        elif error_x < -tolerancia: cmds.append((PIN_BASE, self.estado_actual[PIN_BASE] + paso_x))
         
-        # Compensación vertical: Si bajamos (error_y < 0), subimos muñeca (paso_y)
-        # Se ha fortalecido la compensación sumando un pequeño extra o usando un paso más firme
+        # Lectura segura utilizando .get()
+        ang_base = self.estado_actual.get(PIN_BASE, 90)
+        if error_x > tolerancia: 
+            cmds.append((PIN_BASE, ang_base - paso_x))
+        elif error_x < -tolerancia: 
+            cmds.append((PIN_BASE, ang_base + paso_x))
+        
+        ang_muneca = self.estado_actual.get(PIN_MUÑECA, 90)
         if error_y > tolerancia: 
-            cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] + paso_y))
+            cmds.append((PIN_MUÑECA, ang_muneca + paso_y))
         elif error_y < -tolerancia: 
-            # Si la pinza debe bajar, subimos la muñeca un poco más agresivamente para compensar el descenso
-            cmds.append((PIN_MUÑECA, self.estado_actual[PIN_MUÑECA] - (paso_y + 1)))
+            cmds.append((PIN_MUÑECA, ang_muneca - (paso_y + 1)))
         
-        if cmds: self.mover_tiempo(cmds, esperar=False) # No esperamos OK en IBVS para mayor velocidad
+        if cmds: self.mover_tiempo(cmds, esperar=False)
         return False
 
     def centrar_proporcional(self, error_x, error_y):
         """Ajuste inteligente basado en un controlador Proporcional con compensación reforzada."""
         tolerancia = 10
-        kp_x = 0.03 # Aumentado levemente
+        kp_x = 0.03 
         kp_y = 0.02  
-        max_paso = 4 # Aumentado de 3 a 4
+        max_paso = 4 
         
         if abs(error_x) <= tolerancia and abs(error_y) <= tolerancia:
             return True 
@@ -237,7 +240,8 @@ class ArmController:
             paso_x = 1 if error_x > 0 else -1
 
         if abs(error_x) > tolerancia:
-            nuevo_angulo = self.estado_actual[PIN_BASE] - paso_x
+            ang_base = self.estado_actual.get(PIN_BASE, 90)
+            nuevo_angulo = ang_base - paso_x
             cmds.append((PIN_BASE, nuevo_angulo))
 
         paso_y = int(error_y * kp_y)
@@ -248,25 +252,25 @@ class ArmController:
 
         if abs(error_y) > tolerancia:
             self.intentos_y += 1
-            # Compensación reforzada: Si el error_y es negativo (bajar), 
-            # el ajuste de la muñeca (PIN_MUÑECA) es más fuerte hacia arriba.
             ajuste_muñeca = paso_y
-            if paso_y < 0: # Caso descenso
-                ajuste_muñeca -= 1 # Reforzar subida de muñeca en 1 grado extra
+            if paso_y < 0: 
+                ajuste_muñeca -= 1 
                 
-            nuevo_angulo_15 = self.estado_actual[PIN_MUÑECA] + ajuste_muñeca
+            ang_muneca = self.estado_actual.get(PIN_MUÑECA, 90)
+            nuevo_angulo_15 = ang_muneca + ajuste_muñeca
             cmds.append((PIN_MUÑECA, nuevo_angulo_15))
             
             if self.intentos_y >= 5:
                 paso_6 = 1 if error_y > 0 else -1
-                nuevo_angulo_6 = self.estado_actual[PIN_CODO] + paso_6
+                ang_codo = self.estado_actual.get(PIN_CODO, 140)
+                nuevo_angulo_6 = ang_codo + paso_6
                 cmds.append((PIN_CODO, nuevo_angulo_6))
                 self.intentos_y = 0 
         else:
             self.intentos_y = 0
             
         if cmds:
-            self.mover_tiempo(cmds, esperar=False) # No esperamos OK en centrado proporcional
+            self.mover_tiempo(cmds, esperar=False) 
             
         return False
 
@@ -278,7 +282,7 @@ class ArmController:
         """Mueve el brazo a una posición predefinida en posiciones.py."""
         if nombre_estado in POSICIONES:
             print(f"[BRAZO] Moviendo a estado: {nombre_estado}")
-            self.nombre_estado_actual = nombre_estado # Actualizar nombre para evaluador
+            self.nombre_estado_actual = nombre_estado 
             self.mover_tiempo(POSICIONES[nombre_estado], forzar=forzar, esperar=esperar)
         else:
             print(f"[BRAZO] Error: Estado '{nombre_estado}' no encontrado en posiciones.py")

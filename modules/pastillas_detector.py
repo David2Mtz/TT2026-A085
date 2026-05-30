@@ -143,12 +143,4 @@ def verify_pill_in_gripper(frame):
     # Requiere al menos 150 píxeles para confirmar
     return pixels_detectados > 150
 
-def iniciar_deteccion(camara):
-    """ Ajusta el brillo del LED para la fase de búsqueda de pastillas (48) """
-    print("[DETECTOR PASTILLAS] Ajustando iluminación: 48")
-    camara.set_led_brightness(48)
 
-def finalizar_deteccion(camara):
-    """ Apaga el LED al terminar la recolección (0) """
-    print("[DETECTOR PASTILLAS] Restaurando iluminación: 0")
-    camara.set_led_brightness(0)

@@ -149,14 +149,34 @@ class PredictorP300:
                 conteo_epocas[color_id] += 1
 
         # 5. Decisión Final
-        ganador = max(puntajes, key=puntajes.get)
         colores_map = {1: "Rojo", 2: "Verde", 3: "Azul"}
-        
+
+        # Detectar empates en puntajes totales
+        max_val = max(puntajes.values())
+        tied = [cid for cid, p in puntajes.items() if abs(p - max_val) < 1e-9]
+
+        # Si hay empate, evitar escoger 'Verde' (id=2) cuando sea posible
+        if len(tied) > 1:
+            if 2 in tied:
+                tied_without_verde = [cid for cid in tied if cid != 2]
+                if tied_without_verde:
+                    ganador = min(tied_without_verde)  # determinista: elegir el menor id disponible
+                    print(f"[EMPATE] Evitando 'Verde'. Elegido: {colores_map[ganador]}")
+                else:
+                    # Sólo quedó 'Verde' en el empate (caso raro), escogerla como último recurso
+                    ganador = 2
+                    print("[EMPATE] Sólo 'Verde' disponible en el empate. Seleccionando 'Verde'.")
+            else:
+                ganador = min(tied)  # determinista entre los empatados
+                print(f"[EMPATE] Elegido: {colores_map[ganador]}")
+        else:
+            ganador = tied[0]
+
         print("\n--- RESULTADOS PREDICCIÓN ---")
         for cid, p in puntajes.items():
             avg_p = p / conteo_epocas[cid] if conteo_epocas[cid] > 0 else 0
             print(f"Color {colores_map[cid]}: Confianza {avg_p:.4f} ({conteo_epocas[cid]} épocas)")
-            
+
         return colores_map[ganador]
 
     def graficar_erp(self, ruta_csv, sujeto_nombre="Nuevo Sujeto"):

@@ -30,7 +30,7 @@ def main():
     color_idx = 0 # Empezar con verde
     
     print("\nInstrucciones:")
-    print("- La cámara ajustará el LED y la Exposición automáticamente.")
+    print("- La cámara ajustará la Exposición automáticamente.")
     print("- Presiona 'c' para cambiar el color de la base.")
     print("- Presiona 'q' para salir.")
 
@@ -49,7 +49,7 @@ def main():
                 # UI
                 cv2.putText(processed_frame, f"Modo: AUTONOMO | Base: {color_base}", (10, 25), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                cv2.putText(processed_frame, f"LED: {auto_exp.current_led} | EXP: {auto_exp.current_exp}", (10, 50), 
+                cv2.putText(processed_frame, f"EXP: {auto_exp.current_exp}", (10, 50), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
                 cv2.imshow("Deteccion Autonoma", processed_frame)
@@ -64,7 +64,6 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        camara.set_led_brightness(0)
         camara.liberar()
         cv2.destroyAllWindows()
 

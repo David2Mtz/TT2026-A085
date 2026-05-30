@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Offsets de la pinza respecto al centro de la cámara (Recolección)
-OFFSET_X = int(os.getenv('OFFSET_X', -30))
+OFFSET_X = int(os.getenv('OFFSET_X', -40))
 OFFSET_Y = int(os.getenv('OFFSET_Y', -265))
 
 # Offset de alineación final (justo antes de cerrar)

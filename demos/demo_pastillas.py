@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
-from modules.pastillas_detector import process_pastillas_frame, iniciar_deteccion, finalizar_deteccion
+from modules.pastillas_detector import process_pastillas_frame
 from modules.auto_exposure import AutoExposureControl
 
 # Cargar variables de entorno
@@ -45,9 +45,6 @@ def main():
         print("\n[INFO] Iniciando cámara...")
         camara = CameraSerial(port=puerto_camara, baud_rate=460800)
         print("[INFO] Cámara lista.")
-        
-        # Activar LED para la detección de pastillas (48)
-        iniciar_deteccion(camara)
     except Exception as e:
         print(f"[ERROR] No se pudo conectar a la cámara: {e}")
         brazo.cerrar()
@@ -72,8 +69,8 @@ def main():
 
             alto, ancho = frame.shape[:2]
             frame_vis = frame.copy()
-            # Mostrar valores de exposición en el frame
-            cv2.putText(frame_vis, f"LED: {auto_exp.current_led} | EXP: {auto_exp.current_exp}", (10, alto - 20), 
+            # Mostrar valor de exposición en el frame
+            cv2.putText(frame_vis, f"EXP: {auto_exp.current_exp}", (10, alto - 20), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
             if not objetivo_centrado:
@@ -108,8 +105,6 @@ def main():
     finally:
         print("\n[INFO] Cerrando recursos...")
         if 'camara' in locals():
-            # Apagar LED antes de cerrar
-            finalizar_deteccion(camara)
             camara.liberar()
         if 'brazo' in locals():
             brazo.mover_a_estado("HOME")

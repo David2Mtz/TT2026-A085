@@ -38,7 +38,7 @@ POSICIONES = {
     "OBSERVACION_MANIQUI": [
         (PIN_BASE, 170),   # Regresar base al frente
         (PIN_CODO, 105), 
-        (PIN_MUÑECA, 90),    # Muñeca (Pitch)
+        (PIN_MUÑECA, 80),    # Muñeca (Pitch)
         (PIN_HOMBRO, 140), # Posición hacia la cara del usuario
         (PIN_ROTADOR, 0), # MANTENER NIVELADO PARA MIRAR AL FRENTE (Sin invertir)
         (PIN_PINZA, 0)     # Pinza (Cerrada)

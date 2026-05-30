@@ -141,16 +141,5 @@ def get_mouth_coordinates(frame):
     centro, _ = detect_mouth_landmarks_by_color(frame)
     return frame, centro
 
-def iniciar_deteccion(camara):
-    """
-    Aumenta el brillo del LED para la fase de detección.
-    """
-    print("[DETECTOR BOCA] Ajustando iluminación: 255")
-    camara.set_led_brightness(255)
 
-def finalizar_deteccion(camara):
-    """
-    Apaga el LED al finalizar la detección.
-    """
-    print("[DETECTOR BOCA] Restaurando iluminación: 0")
-    camara.set_led_brightness(0)
+

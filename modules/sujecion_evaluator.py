@@ -1,7 +1,7 @@
 # modules/sujecion_evaluator.py
 
 class SujecionEvaluator:
-    def __init__(self, umbral_tolerancia=45, umbral_colision=8):
+    def __init__(self, umbral_tolerancia=45, umbral_colision=25):
         self.baseline_recoleccion = None
         self.baselines_vacio = {} # Diccionario para firmas de vacío por estado
         self.norma_vacio_cerrado = None # Firma genérica (legacy)

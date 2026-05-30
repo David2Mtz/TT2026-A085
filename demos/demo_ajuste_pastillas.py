@@ -32,16 +32,14 @@ def main():
     # Nombre de ventana consistente
     win_name = "Calibracion de Pastillas"
     cv2.namedWindow(win_name)
-    cv2.createTrackbar("LED", win_name, 48, 255, nothing)
     cv2.createTrackbar("Exposicion", win_name, 300, 1200, nothing)
     cv2.createTrackbar("Color Base", win_name, 0, 2, nothing)
     colores = ["verde", "azul", "rojo"]
 
     print("\nInstrucciones:")
-    print("- Ajusta los sliders.")
+    print("- Ajusta los sliders de Exposición y Color Base.")
     print("- 'q' para salir.")
 
-    last_led = -1
     last_exp = -1
 
     try:
@@ -50,7 +48,6 @@ def main():
             frame = camara.get_frame()
             
             # Leer valores de trackbars
-            led_val = cv2.getTrackbarPos("LED", win_name)
             exp_val = cv2.getTrackbarPos("Exposicion", win_name)
             color_idx = cv2.getTrackbarPos("Color Base", win_name)
             
@@ -59,10 +56,6 @@ def main():
             color_base = colores[color_idx]
 
             # Aplicar cambios solo si variaron
-            if led_val != last_led:
-                camara.set_led_brightness(led_val)
-                last_led = led_val
-            
             if exp_val != last_exp:
                 camara.set_exposure(exp_val)
                 last_exp = exp_val
@@ -72,7 +65,7 @@ def main():
                 processed_frame, error = process_pastillas_frame(frame, color_base)
                 
                 # Info en pantalla
-                status_text = f"Base: {color_base} | LED: {led_val} | EXP: {exp_val}"
+                status_text = f"Base: {color_base} | EXP: {exp_val}"
                 cv2.putText(processed_frame, status_text, (10, 20), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                 
@@ -88,7 +81,6 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        camara.set_led_brightness(0)
         camara.liberar()
         cv2.destroyAllWindows()
 

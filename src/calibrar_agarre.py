@@ -24,12 +24,10 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.flujo_camara import CameraSerial
 from modules.arm_controller import ArmController
 from modules.pastillas_detector import (
-    process_pastillas_frame,
-    iniciar_deteccion as iniciar_deteccion_pastillas,
-    finalizar_deteccion as finalizar_deteccion_pastillas
+    process_pastillas_frame
 )
 from modules.detectarColor import process_color_frame
-from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, finalizar_deteccion
+from modules.detectorBoca import get_mouth_coordinates
 from modules.auto_exposure import AutoExposureControl
 from modules.blinkDetector import BlinkDetector
 from constants.posiciones import POSICIONES
@@ -146,7 +144,6 @@ def main():
 
             elif estado_actual == Estado.OBSERVACION:
                 if not macro_movimiento_hecho:
-                    iniciar_deteccion_pastillas(camara) 
                     brazo.mover_a_estado("OBSERVACION")
                     time.sleep(2) 
                     macro_movimiento_hecho = True
@@ -223,7 +220,6 @@ def main():
                             (15, brazo.estado_actual[15] + FINAL_CORRECTION_S15)
                         ])
                         estado_actual = Estado.ESPERA_CONFIRMACION_AGARRE
-                        finalizar_deteccion_pastillas(camara)
                         macro_movimiento_hecho = False
 
                     if targets:
@@ -279,7 +275,6 @@ def main():
 
             elif estado_actual == Estado.OBSERVACION_MANIQUI:
                 if not macro_movimiento_hecho:
-                    iniciar_deteccion(camara)
                     brazo.mover_a_estado("OBSERVACION_MANIQUI", forzar=True, esperar=True)
                     macro_movimiento_hecho = True
                     lockon_activado_boca = False
@@ -327,7 +322,6 @@ def main():
                             lockon_activado_boca = True
 
                     if z_coord <= Z_LIMITE_ENTREGA:
-                        finalizar_deteccion(camara)
                         estado_actual = Estado.ESPERA_CONFIRMACION_ENTREGA
                         macro_movimiento_hecho = False
 

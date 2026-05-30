@@ -10,15 +10,14 @@ from dotenv import load_dotenv
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from utils.flujo_camara import CameraSerial
-# Importamos las funciones de control y detección
-from modules.detectorBoca import get_mouth_coordinates, iniciar_deteccion, finalizar_deteccion
+# Importamos las funciones de detección
+from modules.detectorBoca import get_mouth_coordinates
 
 # Cargar variables de entorno
 load_dotenv()
 
 def main():
-    print("--- INICIANDO DEMO: Detector de Boca Mejorado (Color Lima) ---")
-    print("El manejo de LEDs ahora es responsabilidad del modulo detectorBoca.\n")
+    print("--- INICIANDO DEMO: Detector de Boca Mejorado (Color Lima) ---\n")
     
     # Intentar obtener puerto de cámara desde .env
     puerto_camara = os.getenv('PUERTO_CAMARA', '/dev/ttyUSB1')
@@ -29,11 +28,6 @@ def main():
         print(f"[ERROR] No se pudo conectar a la cámara en {puerto_camara}: {e}")
         return
 
-    # Escenario de prueba: El módulo toma el control antes del bucle
-    print("\n>>> LLAMANDO A iniciar_deteccion() desde el modulo...")
-    iniciar_deteccion(camara)
-    print(">>> EL MODULO DEBERIA HABER ENCENDIDO EL LED A 255 <<<\n")
-    
     time.sleep(1) # Tiempo para que la cámara ajuste exposición
 
     try:
@@ -61,11 +55,6 @@ def main():
     except Exception as e:
         print(f"\n[ERROR CRITICO] {e}")
     finally:
-        # Escenario de prueba: El módulo limpia al terminar
-        print("\n>>> LLAMANDO A finalizar_deteccion() desde el modulo...")
-        finalizar_deteccion(camara)
-        print(">>> EL MODULO DEBERIA HABER APAGADO EL LED <<<\n")
-        
         camara.liberar()
         cv2.destroyAllWindows()
 

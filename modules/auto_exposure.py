@@ -10,14 +10,11 @@ class AutoExposureControl:
         self.target_brightness = target_brightness
         self.threshold = threshold
         
-        # Límites conocidos
-        self.min_led = 0
-        self.max_led = 100
+        # Límites conocidos (solo exposición, sin LED)
         self.min_exp = 100
         self.max_exp = 900
         
         # Estado actual
-        self.current_led = 48
         self.current_exp = 500
         self.last_adjustment_time = 0
         self.adjustment_cooldown = 0.5 # Segundos entre ajustes para dejar estabilizar
@@ -31,44 +28,35 @@ class AutoExposureControl:
 
     def update(self, frame, camara):
         """
-        Analiza el frame y ajusta la cámara si es necesario.
-        Retorna True si realizó un ajuste, False si el brillo es óptimo.
+        Analiza el frame y ajusta la exposición de la cámara si es necesario.
         """
-        now = time.time()
-        if now - self.last_adjustment_time < self.adjustment_cooldown:
+        import time
+        if time.time() - self.last_adjustment_time < self.adjustment_cooldown:
+            return False
+            
+        if frame is None or camara is None:
             return False
 
-        if frame is None:
-            return False
-
-        # Calcular brillo promedio (Luminancia)
-        # Convertimos a escala de grises para medir rápido
         import cv2
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         avg_brightness = gray.mean()
-
         diff = self.target_brightness - avg_brightness
 
         if abs(diff) <= self.threshold:
             return False # Brillo óptimo
 
-        # Lógica de ajuste tipo "Cámara Fotográfica"
-        if diff > 0: # Demasiado oscuro -> Aumentar luz
-            if self.current_led < self.max_led:
-                self.current_led = min(self.max_led, self.current_led + 20)
-                camara.set_led_brightness(self.current_led)
-            elif self.current_exp < self.max_exp:
+        # Ajustamos SOLO exposición (sin LED)
+        tiene_exp = hasattr(camara, 'set_exposure')
+
+        if diff > 0: # Demasiado oscuro
+            if self.current_exp < self.max_exp and tiene_exp:
                 self.current_exp = min(self.max_exp, self.current_exp + 50)
                 camara.set_exposure(self.current_exp)
         
-        else: # Demasiado brillante -> Reducir luz
-            if self.current_exp > self.min_exp:
+        else: # Demasiado brillante
+            if self.current_exp > self.min_exp and tiene_exp:
                 self.current_exp = max(self.min_exp, self.current_exp - 50)
                 camara.set_exposure(self.current_exp)
-            elif self.current_led > self.min_led:
-                self.current_led = max(self.min_led, self.current_led - 20)
-                camara.set_led_brightness(self.current_led)
 
-        self.last_adjustment_time = now
-        print(f"[AutoExp] Brillo: {avg_brightness:.1f} -> Ajustando a LED:{self.current_led} EXP:{self.current_exp}")
+        self.last_adjustment_time = time.time()
         return True
